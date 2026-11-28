@@ -18,7 +18,6 @@ public:
       virtual bool OnInputActionStateChanged(InputAction* action) = 0;
       virtual void RegisterOnUpdate(InputAction* action) = 0;
       virtual void UnregisterOnUpdate(InputAction* action) = 0;
-      virtual bool IsUINavigationActionId(unsigned int id) const = 0;
    };
 
    InputAction(EventManager* eventManager, const string& settingId, const string& label, const string& defaultMappings, const std::function<void(InputAction&, bool, bool)>& onChange)
@@ -38,12 +37,16 @@ public:
    void SetMapping(const string& mappingString);
    void AddMapping(const vector<ButtonMapping>& mapping);
    void UnmapDevice(uint16_t deviceId);
+   void UnmapElement(uint16_t deviceId, uint16_t axisOrButtonId, float axisThreshold, bool axisReversed, bool directOnly = false, bool byElementIdOnly = false);
    bool IsMappedToDevice(uint16_t deviceId) const;
    bool HasMapping(const vector<ButtonMapping>& mapping) const;
    bool IsMapped() const { return !m_inputBindings.empty(); }
    const string& GetDefaultMappingString() const { return m_defaultMappings; }
    string GetMappingString() const;
+   string GetStoredMappingString(const Settings& settings) const;
    string GetMappingLabel() const;
+   using MappingBindings = vector<vector<ButtonMapping>>;
+   static MappingBindings ParseMappingString(const string& mappingString, EventManager* eventManager);
    static bool IsSameMapping(const vector<ButtonMapping>& mappingA, const vector<ButtonMapping>& mappingB);
 
    void OnInputChanged(ButtonMapping* mapping) override;
@@ -75,18 +78,9 @@ public:
 
    const string& GetLabel() const { return m_label; }
 
-   bool IsNavigationAction() const;
-
    int NewDirectStateSlot();
    void SetDirectState(int slot, bool state);
    bool GetDirectState(int slot) const;
-
-private:
-   const string m_settingId;
-   const string m_label;
-   const string m_defaultMappings;
-   const std::function<void(InputAction&, bool, bool)> m_onStateChange;
-   EventManager* const m_eventManager;
 
    // A binding is a chord of buttons that must all be pressed together to trigger the action.
    // 'suppressed' vetoes a completed chord in favor of a longer one completed by the same press.
@@ -95,6 +89,15 @@ private:
       vector<ButtonMapping> buttons;
       bool suppressed = false;
    };
+   const vector<Binding>& GetBindings() const { return m_inputBindings; }
+
+private:
+   const string m_settingId;
+   const string m_label;
+   const string m_defaultMappings;
+   const std::function<void(InputAction&, bool, bool)> m_onStateChange;
+   EventManager* const m_eventManager;
+
    static bool IsCompletedByPress(const Binding& binding, uint32_t deviceAndButtonId, const std::function<bool(const ButtonMapping&)>& memberNewState);
    vector<Binding> m_inputBindings;
    vector<bool> m_directStates;

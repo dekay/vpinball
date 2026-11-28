@@ -124,8 +124,6 @@ WinEditor::WinEditor(HINSTANCE appInstance)
 
    m_ToolCur = IDC_SELECT;
 
-   m_hbmInPlayMode = nullptr;
-
 #ifdef _WIN64
    m_scintillaDll = LoadLibrary("SciLexerVP64.DLL");
 #else
@@ -146,8 +144,6 @@ WinEditor::WinEditor(HINSTANCE appInstance)
            ShowError("Unable to load SciLexerVP.DLL or SciLexer.DLL");
        #endif
    }
-
-   wintimer_init();
 }
 
 //Releases Resources for Script editor
@@ -672,9 +668,7 @@ bool WinEditor::ParseCommand(const size_t code, const bool notify)
       OpenRecentFile(code);
       return true;
 
-   case IDM_OPEN:
-      LoadFile(true);
-      return true;
+   case IDM_OPEN: LoadFile(); return true;
 
    case IDM_CLOSE:
    case SC_CLOSE:
@@ -830,10 +824,7 @@ void WinEditor::DoPlay(const int playMode)
    PinTableWnd *const tableEditor = GetActiveTableEditor();
    CComObject<PinTable> *const table = GetActiveTable(); //!! no const here because of CopyForPlay call below that changes some data implicitly inside
    if (tableEditor == nullptr || table == nullptr)
-   {
-      m_table_played_via_SelectTableOnStart = false;
       return;
-   }
 
    if (playMode == 0 && g_settingsService.GetAppSettings().GetGlobal_ResetLogOnPlay())
       Logger::Truncate();
@@ -843,10 +834,7 @@ void WinEditor::DoPlay(const int playMode)
    // Create the player on a (shallow) copy of the table, that will be animated by the script, animations, ...
    PinTable *live_table = table->CopyForPlay();
    if (live_table == nullptr)
-   {
-      m_table_played_via_SelectTableOnStart = false;
       return;
-   }
 
    Player::PlayMode sessionMode;
    switch (playMode)
@@ -881,7 +869,6 @@ void WinEditor::DoPlay(const int playMode)
    if (g_pplayer == nullptr)
    {
       sessionTable->Release();
-      m_table_played_via_SelectTableOnStart = false;
       return;
    }
 
@@ -957,36 +944,26 @@ void WinEditor::DoPlay(const int playMode)
    tableEditor->EnableWindow();
    tableEditor->SetFocus();
    tableEditor->SetActiveWindow();
-
-   // If the table was played via the "Select Table on Start" option, then close the table and propose to load another one
-   if (m_table_played_via_SelectTableOnStart)
-   {
-      CloseTable(tableEditor);
-      m_table_played_via_SelectTableOnStart = LoadFile(false);
-      if (m_table_played_via_SelectTableOnStart)
-         DoPlay(0);
-   }
 }
 
-bool WinEditor::LoadFile(const bool updateEditor)
+bool WinEditor::LoadFile()
 {
    const string& szInitialDir = g_settingsService.GetAppSettings().GetRecentDir_LoadDir();
 
    vector<string> filename;
-   if (!OpenFileDialog(szInitialDir, filename, "Visual Pinball Tables (*.vpx)\0*.vpx\0Old Visual Pinball Tables(*.vpt)\0*.vpt\0", "vpx", 0,
-          !updateEditor ? "Select a Table to Play or press Cancel to enter Editor-Mode"s : string()))
+   if (!OpenFileDialog(szInitialDir, filename, "Visual Pinball Tables (*.vpx)\0*.vpx\0Old Visual Pinball Tables(*.vpt)\0*.vpt\0", "vpx", 0, string()))
       return false;
 
    const size_t index = filename[0].find_last_of(PATH_SEPARATOR_CHAR);
    if (index != string::npos)
       g_settingsService.GetAppSettings().SetRecentDir_LoadDir(filename[0].substr(0, index), false);
 
-   LoadFileName(PathFromString(filename[0]), updateEditor); // Native narrow path from the dialog
+   LoadFileName(PathFromString(filename[0])); // Native narrow path from the dialog
 
    return true;
 }
 
-void WinEditor::LoadFileName(const std::filesystem::path& filename, const bool updateEditor)
+void WinEditor::LoadFileName(const std::filesystem::path &filename)
 {
    if (m_vtable.size() == MAX_OPEN_TABLES)
    {
@@ -1035,21 +1012,18 @@ void WinEditor::LoadFileName(const std::filesystem::path& filename, const bool u
       UpdateRecentFileList(filename);
 
       ppt->AddMultiSel(ppt->GetUIPart(ppt->m_table), false, true, false);
-      if (updateEditor)
+      GetLayersListDialog()->ResetView();
+      ToggleToolbar();
+      if (m_dockNotes != nullptr)
+         m_dockNotes->Enable();
+
+      SetFocus();
+
+      const string &audit = ppt->m_table->AuditTable(true);
+      if (audit.find(". Error:"s) != std::string::npos)
       {
-         GetLayersListDialog()->ResetView();
-         ToggleToolbar();
-         if (m_dockNotes != nullptr)
-            m_dockNotes->Enable();
-
-         SetFocus();
-
-         const string &audit = ppt->m_table->AuditTable(true);
-         if (audit.find(". Error:"s) != std::string::npos)
-         {
-            InfoDialog info("This table contains error(s) that need to be fixed to ensure correct play.\r\n\r\n" + audit);
-            info.DoModal(GetHwnd());
-         }
+         InfoDialog info("This table contains error(s) that need to be fixed to ensure correct play.\r\n\r\n" + audit);
+         info.DoModal(GetHwnd());
       }
 
       PLOGI << "UI Post Load End";
@@ -1193,6 +1167,8 @@ void WinEditor::SetEnableMenuItems()
 
       mainMenu.CheckMenuItem(ID_VIEW_GRID, MF_BYCOMMAND | (editor->GetDisplayGrid() ? MF_CHECKED : MF_UNCHECKED));
       mainMenu.CheckMenuItem(ID_VIEW_BACKDROP, MF_BYCOMMAND | (editor->GetDisplayBackdrop() ? MF_CHECKED : MF_UNCHECKED));
+
+      mainMenu.EnableMenuItem(ID_EDIT_PHYSICSOPTIONS, enabled);
    }
    else
    {
@@ -1254,6 +1230,8 @@ void WinEditor::SetEnableMenuItems()
       mainMenu.EnableMenuItem(ID_INSERT_PRIMITIVE, grayed);
       mainMenu.EnableMenuItem(ID_INSERT_FLASHER, grayed);
       mainMenu.EnableMenuItem(ID_INSERT_RUBBER, grayed);
+
+      mainMenu.EnableMenuItem(ID_EDIT_PHYSICSOPTIONS, grayed);
    }
 }
 
@@ -1523,9 +1501,6 @@ void WinEditor::OnInitialUpdate()
    }
 
    ShowWindow(SW_SHOW);
-
-   // Load 'in playing mode' image for UI
-   m_hbmInPlayMode = (HBITMAP)LoadImage(m_instance, MAKEINTRESOURCE(IDB_INPLAYMODE), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
 
    UpdateRecentFileList(string()); // update the recent loaded file list
 
@@ -2312,7 +2287,7 @@ void WinEditor::OpenRecentFile(const size_t menuId)
    if (Index >= m_recentTableList.size())
       return;
    const std::filesystem::path filename = m_recentTableList[Index]; // A copy, as loading updates the list
-   LoadFileName(filename, true);
+   LoadFileName(filename);
 }
 
 void WinEditor::CopyPasteElement(const CopyPasteModes mode)

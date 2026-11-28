@@ -24,7 +24,6 @@ HomePage::HomePage()
 void HomePage::BuildPage()
 {
    constexpr bool hasKeyboard = !(g_isAndroid || g_isIOS);
-   constexpr bool isTouch = g_isAndroid || g_isIOS;
 
    ////////////////////////////////////////////////////////////////////////////////////////////////
    AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Table options"s));
@@ -52,8 +51,8 @@ void HomePage::BuildPage()
 
    ////////////////////////////////////////////////////////////////////////////////////////////////
    const bool allowLiveEditor = hasKeyboard && m_player->m_renderer->m_stereo3D != STEREO_VR && m_player->m_ptable->m_liveBaseTable;
-   if (allowLiveEditor || isTouch || !hasKeyboard)
-   AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Misc. Actions"s));
+   if (allowLiveEditor || !hasKeyboard)
+      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Misc. Actions"s));
 
    if (allowLiveEditor)
       AddItem(std::make_unique<InGameUIItem>("Live Editor"s, ""s,
@@ -61,19 +60,6 @@ void HomePage::BuildPage()
          {
             m_player->m_liveUI->HideUI();
             m_player->m_liveUI->OpenEditorUI();
-         }));
-
-   if (isTouch && !m_player->m_vrDevice)
-      AddItem(std::make_unique<InGameUIItem>(g_settingsService.GetAppSettings().GetPlayer_TouchOverlay() ? "Disable Touch Overlay"s : "Enable Touch Overlay"s, ""s,
-         [this]()
-         {
-            bool showTouchOverlay = !g_settingsService.GetAppSettings().GetPlayer_TouchOverlay();
-            g_settingsService.GetAppSettings().ResetPlayer_TouchOverlay();
-            g_settingsService.GetAppSettings().SetPlayer_TouchOverlay(showTouchOverlay, false);
-            m_player->m_liveUI->ShowTouchOverlay(showTouchOverlay);
-            ImGui::GetIO().MousePos.x = 0;
-            ImGui::GetIO().MousePos.y = 0;
-            RequestRebuild();
          }));
 
    if (!hasKeyboard)
@@ -127,6 +113,9 @@ void HomePage::BuildPage()
 
    AddItem(std::make_unique<InGameUIItem>("Logging Settings"s, ""s, "settings/logging"s));
 
+   if (m_player->m_liveUI->m_inGameUI.UsesDesktopRenderer() && !m_player->IsVR())
+      AddItem(std::make_unique<InGameUIItem>("Startup Wizard"s, "Configure this machine for Visual Pinball"s, "settings/startup_wizard"s));
+
    AddItem(std::make_unique<InGameUIItem>("System Info"s, ""s, "misc/systeminfo"s));
 }
 
@@ -135,9 +124,7 @@ void HomePage::CollectPanes(vector<InGameUIPane>& panes)
    InGameUIPage::CollectPanes(panes);
 
    // Display table name, author, version, blurb and description => Move to a dedicated page ?
-   if (m_player->m_vrDevice != nullptr)
-      return;
-
+   // (embedded in the page content, so also shown in VR where it used to be skipped as a fullscreen backdrop)
    InGameUIPane pane;
    pane.placement = InGameUIPane::Placement::Embedded;
    pane.id = "tableInfo"s;
@@ -168,6 +155,8 @@ void HomePage::CollectPanes(vector<InGameUIPane>& panes)
       info << " (" << (!m_player->m_ptable->m_dateSaved.empty() ? m_player->m_ptable->m_dateSaved : "N/A"s) << " Revision " << m_player->m_ptable->m_numTimesSaved << ")\n";
 
       // Drawn inline in the page's item list (no window or background of its own)
+      // Separated from the last item above by a blank band, so it does not read as part of it
+      ImGui::Dummy(ImVec2(0.f, ImGui::GetTextLineHeight() * 1.5f));
       m_player->m_liveUI->SetMarkdownStartId(ImGui::GetItemID());
       ImGui::Markdown(info.str().c_str(), info.str().length(), m_player->m_liveUI->GetMarkdownConfig());
    };

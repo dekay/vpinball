@@ -260,15 +260,9 @@ void Win32EditCommand::Execute()
       vpxEditor.LoadEditorSetupFromSettings();
       if (!m_tableFilename.empty() && std::filesystem::exists(m_tableFilename))
       {
-         vpxEditor.LoadFileName(m_tableFilename, true);
+         vpxEditor.LoadFileName(m_tableFilename);
          if (!m_tableIniFileName.empty() && FileExists(m_tableIniFileName) && vpxEditor.GetActiveTable())
             vpxEditor.GetActiveTable()->SetSettingsFileName(m_tableIniFileName);
-      }
-      else if (g_settingsService.GetAppSettings().GetEditor_SelectTableOnStart())
-      {
-         vpxEditor.m_table_played_via_SelectTableOnStart = vpxEditor.LoadFile(false);
-         if (vpxEditor.m_table_played_via_SelectTableOnStart)
-            vpxEditor.DoPlay(0);
       }
       winApp.Run();
    }
@@ -333,6 +327,59 @@ void LiveEditCommand::Execute()
          if (std::exchange(notifyLoadFailed, false))
             player->m_liveUI->PushNotification("Failed to load table '" + PathToUTF8(m_tableFilename) + "', starting with a new table", 10000);
       });
+}
+
+
+void FrontendCommand::Execute()
+{
+   // The frontend's next session starts in the VR state the last ended session was actually in
+   Player::VROverride resumeVR = Player::VROverride::Auto;
+   for (;;)
+   {
+      // Host a frontend session on a synthetic empty table, then follow the session switches it
+      // requests (playing or editing a table). When a session started from the frontend ends, loop
+      // back to a new frontend session; when the frontend session itself ends, leave the app.
+      CComObject<PinTable>* table;
+      CComObject<PinTable>::CreateInstance(&table);
+      table->AddRef();
+      table->m_title = "Visual Pinball"s;
+      table->GetSettings().SetIniPath(std::filesystem::path()); // No per-table settings file on the frontend table
+
+      Player::SessionSwitch sessionSwitch;
+      sessionSwitch.table = table;
+      sessionSwitch.playMode = Player::PlayMode::Frontend;
+      sessionSwitch.vr = resumeVR;
+      bool lastSessionWasFrontend = false;
+      while (sessionSwitch.table != nullptr)
+      {
+         lastSessionWasFrontend = (sessionSwitch.playMode == Player::PlayMode::Frontend);
+         PinTable* sessionTable = sessionSwitch.table;
+         const Player::PlayMode sessionMode = sessionSwitch.playMode;
+         const Player::VROverride sessionVR = sessionSwitch.vr;
+         const bool openEditor = sessionSwitch.openEditor;
+         vector<Player::StackedTable> suspended = std::move(sessionSwitch.suspended);
+         sessionSwitch = Player::SessionSwitch();
+         {
+            LoadProgress loadProgress;
+            auto player = std::make_unique<Player>(sessionTable, sessionMode, loadProgress, sessionVR);
+            player->AdoptSuspendedSessions(std::move(suspended));
+            {
+               ScopedUserMessageSink msgSink(player->m_liveUI);
+               if (openEditor)
+                  player->m_liveUI->OpenEditorUI();
+               player->GameLoop();
+            }
+            player->TakeTableSwitch(sessionSwitch);
+            // A session that ends without a switch sends the host back to the frontend, which
+            // resumes in the VR state the ended session was actually in (XR frontend round trip)
+            if (sessionSwitch.table == nullptr)
+               resumeVR = player->IsVR() ? Player::VROverride::ForceOn : Player::VROverride::Auto;
+         }
+         sessionTable->Release();
+      }
+      if (lastSessionWasFrontend)
+         return;
+   }
 }
 
 
@@ -456,6 +503,7 @@ enum option_names
    OPTION_EDIT,
 #endif
    OPTION_LIVE_EDIT,
+   OPTION_FRONTEND,
    OPTION_PLAY,
    OPTION_POVEDIT,
    OPTION_POV,
@@ -506,6 +554,7 @@ static const CommandLineOption options[] = {
 #endif
    { OPTION_LIVE_EDIT, "LiveEdit"s,
       "[opt filename]  Start in live editor mode. if a filename is provided, loads it as the table to edit. WARNING Unstable feature only provided for early testing"s },
+   { OPTION_FRONTEND, "Frontend"s, "Start in the mini frontend mode"s },
    { OPTION_PLAY, "Play"s, "[filename]  Load and play file"s },
    { OPTION_POVEDIT, "PovEdit"s, "[filename]  Load and run file in live editing mode, then export new pov on exit"s },
    { OPTION_POV, "Pov"s, "[filename]  Load, export pov and close"s },
@@ -531,7 +580,7 @@ static const CommandLineOption options[] = {
    { OPTION_PREFPATH, "PrefPath"s, "[path]  Use a custom preferences path instead of default"s },
    { OPTION_LESSCPUTHREADS, "LessCPUthreads"s, "Limit the amount of parallel execution"s },
 #ifndef ENABLE_BGFX
-   { OPTION_GLES, "GLES"s, "[value]  Overrides the global emission scale (day/night setting, value range: 0.115..0.925) [Deprecated, uses ini serttings instead]"s },
+   { OPTION_GLES, "GLES"s, "[value]  Overrides the global emission scale (day/night setting, value range: 0.115..0.925) [Deprecated, uses ini settings instead]"s },
 #endif
 };
 
@@ -769,6 +818,8 @@ void CommandLineProcessor::ProcessCommandLine(int nArgs, const char* szArglist[]
             commands.push_back(std::make_unique<LiveEditCommand>());
          }
          break;
+
+      case OPTION_FRONTEND: commands.push_back(std::make_unique<FrontendCommand>()); break;
 
       case OPTION_POVEDIT:
       case OPTION_PLAY:

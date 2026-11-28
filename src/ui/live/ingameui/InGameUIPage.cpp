@@ -296,21 +296,22 @@ void InGameUIPage::AdjustItem(float direction, bool isInitialPress)
    if (m_selectedItem < 0 || m_selectedItem >= (int)m_items.size())
       return;
    const auto& item = m_items[m_selectedItem];
-   const uint32_t now = msec();
+   const uint64_t nowNs = SDL_GetTicksNS();
+   const uint64_t now = nowNs / 1000000;
    if (isInitialPress)
    {
       m_pressedItemLabel = item->m_label;
       m_pressStartMs = now;
-      m_lastUpdateMs = now;
+      m_lastUpdateNs = nowNs;
    }
    else if (m_pressedItemLabel != item->m_label)
    {
       // Different item, discard
       return;
    }
-   const float elapsed = static_cast<float>(now - m_lastUpdateMs) / 1000.f;
-   m_lastUpdateMs = now;
-   const uint32_t elapsedSincePress = now - m_pressStartMs;
+   const float elapsed = static_cast<float>(static_cast<double>(nowNs - m_lastUpdateNs) / 1000000000.);
+   m_lastUpdateNs = nowNs;
+   const uint64_t elapsedSincePress = now - m_pressStartMs;
    float speedFactor;
    if (elapsedSincePress < 250)
       speedFactor = 1.0f;
@@ -358,9 +359,6 @@ void InGameUIPage::AdjustItem(float direction, bool isInitialPress)
          if (direction < 0.f)
          {
             item->m_inputAction->ClearMapping();
-            // Base navigation items must always be mapped (otherwise navigation ends up broken), so immediately start a mapping definition
-            if (item->m_inputAction->IsNavigationAction())
-               RequestInputActionPopup(*item);
          }
          else
          {
@@ -451,6 +449,8 @@ void InGameUIPage::ReleaseAdjustedItem()
 
 void InGameUIPage::Update(float elapsedS)
 {
+   m_wasUpdated = true;
+
    // Rebuild requests made while a slider is being dragged are held until it is released. A rebuild
    // stops the frame at the item that requested it (see the renderer's item loop), so the page is
    // drawn shorter: its scrollbar disappears, the content area gets wider and the slider's scale
@@ -493,17 +493,20 @@ void InGameUIPage::Update(float elapsedS)
          using enum InGameUIItem::Type;
          return item->m_type == SaveChanges || item->m_type == ResetToDefaults || item->m_type == ResetToStoredValues || item->m_type == Back;
       });
-   if (IsAdjustable())
+   if (UsesStandardActionItems())
    {
-      if (!IsDefaults())
-         m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::ResetToDefaults));
-      if (IsModified())
-         m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::ResetToStoredValues));
-      if (m_saveMode != SaveMode::None && IsModified())
-         m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::SaveChanges));
+      if (IsAdjustable())
+      {
+         if (!IsDefaults())
+            m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::ResetToDefaults));
+         if (IsModified())
+            m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::ResetToStoredValues));
+         if (m_saveMode != SaveMode::None && IsModified())
+            m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::SaveChanges));
+      }
+      if (!m_player->m_isLoading || IsBackAllowedWhileLoading())
+         m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::Back));
    }
-   if (!m_player->m_isLoading || IsBackAllowedWhileLoading())
-      m_items.push_back(std::make_unique<InGameUIItem>(InGameUIItem::Type::Back));
 
    // As we may have changed the number of selectable items, ensure m_selectedItem is still valid and pointing to a selectable item
    if (!HasSelectableItem())
@@ -513,17 +516,6 @@ void InGameUIPage::Update(float elapsedS)
       m_selectedItem = clamp(m_selectedItem, 0, static_cast<int>(m_items.size()) - 1);
       while (!m_items[m_selectedItem]->IsSelectable())
          m_selectedItem = (m_selectedItem + 1) % static_cast<int>(m_items.size());
-   }
-
-   // A navigation action must always be bound: keep requesting the binding popup until a valid
-   // mapping is defined (the popup itself is rendered by the page renderer)
-   if (!m_defineActionPopup && m_defineActionItem)
-   {
-      assert(false); // Not supposed to happen as the only way to close the popup is to actually define a mapping which deselects the item
-      if (m_defineActionItem->m_inputAction->IsNavigationAction() && !m_defineActionItem->m_inputAction->IsMapped())
-         m_defineActionPopup = true;
-      else
-         m_defineActionItem = nullptr;
    }
 
    if (m_openAnimTarget != m_openAnimPos)

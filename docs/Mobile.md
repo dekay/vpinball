@@ -37,7 +37,7 @@ The app comes with an example table so you can try it right away.
 
 ## Getting the app
 
-**iPhone and iPad:** install *Visual Pinball* from the [App Store](https://apps.apple.com/us/app/visual-pinball/id6547859926). Needs iOS 26 or later.
+**iPhone and iPad:** install *Visual Pinball* from the [App Store](https://apps.apple.com/us/app/visual-pinball/id6547859926). Needs iOS 26.6 or later.
 
 **Android:** install *Visual Pinball* from [Google Play](https://play.google.com/store/apps/details?id=org.vpinball.vpinball_bgfx), or install an APK. Needs a 64-bit device running Android 13 or later. Google Play may warn you when installing an APK from another source.
 
@@ -72,16 +72,18 @@ The screen is divided into invisible areas. Touching an area presses that button
 
 | Area | What it does |
 |---|---|
-| Top left | Insert a coin |
-| Top right | Open the [in-game menu](#the-in-game-menu) |
-| Upper left / upper right | Left / right magna-save |
-| Middle left / middle right | Nudge the table left / right |
+| Top strip, left quarter | Insert a coin |
+| Top strip, second quarter | Extra ball (the buy-in button of modern machines) |
+| Top strip, right half | Open the [in-game menu](#the-in-game-menu) |
+| Upper half, left / right | Nudge the table left / right |
 | Lower left / lower right | Left / right flipper |
 | Lower middle | Nudge the table forward |
+| Below the flippers, left / right | Left / right magna-save |
+| Bottom middle | Lockbar button (the fire button of modern machines) |
 | Bottom left | Start a game |
 | Bottom right | Plunger. Hold to pull back, let go to launch |
 
-The first few times you start a table, a message reminds you where the areas are. You can also draw them on screen while playing: open the in-game menu and choose **Enable Touch Overlay**.
+The first few times you start a table, the areas are shown on screen for a few seconds, with their names. To show them all the time, open the in-game menu and choose **Enable Touch Overlay**. The areas light up while you touch them.
 
 Nudging is done with the touch areas or a game controller; the phone's motion sensors are not used. Flippers, bumpers and slingshots give haptic feedback on iPhone, Android phones and Quest controllers. The strength can be changed in **Input Settings** in the in-game menu.
 

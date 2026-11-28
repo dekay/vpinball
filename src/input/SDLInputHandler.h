@@ -114,6 +114,10 @@ public:
 
       case SDL_EVENT_FINGER_DOWN:
       case SDL_EVENT_FINGER_UP:
+         // Only touch screens drive the regions (trackpad fingers are gestures, see LiveUI::HandleTrackpadFingers)
+         if (SDL_GetTouchDeviceType(e.tfinger.touchID) != SDL_TOUCH_DEVICE_DIRECT)
+            break;
+         m_pininput.OnTouchScreenUsed();
          if (e.tfinger.windowID == SDL_GetWindowID(g_pplayer->m_playfieldWnd->GetCore()))
             m_pininput.PushTouchEvent(e.tfinger.x, e.tfinger.y, e.tfinger.timestamp, e.type == SDL_EVENT_FINGER_DOWN);
          break;
@@ -310,6 +314,19 @@ private:
       // Register all axis to allow selection in the UI (they will optionally be overriden if identified below)
       for (int axis = 0; axis < nAxis; axis++)
          m_pininput.RegisterElementName(deviceId, true, 0x0200 | static_cast<uint16_t>(axis), "Axis #" + std::to_string(axis));
+
+      const int nButtons = SDL_GetNumJoystickButtons(joystick);
+      for (int button = 0; button < nButtons; button++)
+         m_pininput.RegisterElementName(deviceId, false, static_cast<uint16_t>(button), "Button #" + std::to_string(button));
+      const int nHats = SDL_GetNumJoystickHats(joystick);
+      for (int hat = 0; hat < nHats; hat++)
+      {
+         const uint16_t hatId = static_cast<uint16_t>(hat * 4);
+         m_pininput.RegisterElementName(deviceId, false, 0x0100 | hatId, "Hat #" + std::to_string(hat) + " Left");
+         m_pininput.RegisterElementName(deviceId, false, 0x0101 | hatId, "Hat #" + std::to_string(hat) + " Right");
+         m_pininput.RegisterElementName(deviceId, false, 0x0102 | hatId, "Hat #" + std::to_string(hat) + " Up");
+         m_pininput.RegisterElementName(deviceId, false, 0x0103 | hatId, "Hat #" + std::to_string(hat) + " Down");
+      }
 
       // If the device is recognized as a gamepad, we can get better names for buttons and axis based on the gamepad bindings
       if (SDL_Gamepad* gamepad = SDL_IsGamepad(id) ? SDL_OpenGamepad(id) : nullptr; gamepad)

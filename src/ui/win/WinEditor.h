@@ -88,8 +88,8 @@ public:
    // Editor of the given table, nullptr if the table is not open in an editor
    class PinTableWnd* GetTableEditor(const PinTable* table) const;
    CComObject<PinTable>* GetActiveTable();
-   bool LoadFile(const bool updateEditor);
-   void LoadFileName(const std::filesystem::path& filename, const bool updateEditor);
+   bool LoadFile();
+   void LoadFileName(const std::filesystem::path& filename);
 
    void DoPlay(const int playMode);
 
@@ -177,7 +177,6 @@ public:
    vector<PinTableWnd*> m_vtable;
    CComObject<PinTable> *m_ptableActive = nullptr;
 
-   bool m_table_played_via_SelectTableOnStart = false;
 
 //    HWND m_hwndToolbarMain;
    HWND m_hwndStatusBar;
@@ -203,7 +202,6 @@ public:
    COLORREF m_fillColor;
    Vertex2D m_mouseCursorPosition;
 
-   HBITMAP m_hbmInPlayMode;
 
    bool m_open_minimized = false;
    bool m_disable_pause_menu = false;

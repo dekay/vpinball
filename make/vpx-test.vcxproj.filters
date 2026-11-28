@@ -68,6 +68,12 @@
     <ClCompile Include="../../tests/core/test-settings.cpp">
       <Filter>core</Filter>
     </ClCompile>
+    <ClCompile Include="../../tests/core/test-startupwizard.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="../../tests/core/test-tablecatalog.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
     <ClCompile Include="../../tests/core/test-tabledb.cpp">
       <Filter>core</Filter>
     </ClCompile>
@@ -276,6 +282,12 @@
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="../../tests/ui/test-bevel.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="../../tests/ui/test-frontendmedia.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="../../tests/ui/test-frontendtheme.cpp">
       <Filter>ui</Filter>
     </ClCompile>
     <ClCompile Include="../../tests/ui/test-referenceimage.cpp">

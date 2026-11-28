@@ -6,19 +6,20 @@ VPX supports the following command line options:
 | --- | - |
 | -h, -help, -? | Displays the following info |
 | -v                     | Displays the version |
-| -UnregServer   | Unregister VP functions |
-| -RegServer     | Register VP functions |
+| -UnregServer   | Unregister VP functions (Windows editor build only) |
+| -RegServer     | Register VP functions (Windows editor build only) |
 | | |
-| -Minimized               | Start the windows editor in the 'invisible' minimized window mode |
-| -ExtMinimized            | Start the windows editor in the 'invisible' minimized window mode, but with enabled Pause Menu |
+| -Minimized               | Start the windows editor in the 'invisible' minimized window mode (Windows editor build only) |
+| -ExtMinimized            | Start the windows editor in the 'invisible' minimized window mode, but with enabled Pause Menu (Windows editor build only) |
 | | |
-| -GLES [value]            | Overrides the global emission scale (day/night setting, value range: 0.115..0.925) [Deprecated, uses ini settings instead] |
+| -GLES [value]            | Overrides the global emission scale (day/night setting, value range: 0.115..0.925) [Deprecated, uses ini settings instead] (DirectX 9/OpenGL builds only) |
 | | |
 | -LessCPUthreads          | Limit the amount of parallel execution |
 | -PrefPath [path]         | Use a custom preferences path instead of default |
 | | |
-| -Edit [filename]         | Load file into VP |
+| -Edit [filename]         | Load file into VP (Windows editor build only) |
 | -LiveEdit [opt filename] | Start in live editor mode. If a filename is provided, loads it as the table to edit |
+| -Frontend                | Start in the mini frontend mode (see [Frontend.md](Frontend.md)) |
 | -Play [filename]         | Load and play file |
 | | |
 | -PovEdit [filename]      | Load and run file in live editing mode, then export new pov on exit |

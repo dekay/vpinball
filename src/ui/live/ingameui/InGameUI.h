@@ -20,6 +20,9 @@ public:
    void Open(const string& page);
    bool IsOpened() const { return GetActivePage() != nullptr && GetActivePage()->IsActive(); }
    bool IsOpened(const string &page) const { return IsOpened() && m_navigationHistory.back() == page; }
+   // Gameplay analog input (plunger, nudge) is suspended while the UI is opened, as it overlaps UI commands, except on pages
+   // that keep the game running to test that input live (plunger/nudge settings, see IsPlayerPauseAllowed)
+   bool IsGameplayInputSuspended() const { return IsOpened() && GetActivePage()->IsPlayerPauseAllowed(); }
    void Update();
    void Close();
 
@@ -40,6 +43,7 @@ public:
    InGameUIPage* GetActivePage() const { return m_activePages.empty() ? nullptr : m_activePages.back().get(); }
 
    bool IsFlipperNav() const { return m_useFlipperNav; }
+   bool UsesDesktopRenderer() const;
    void OnUIUpAction();
    void OnUIDownAction();
    void OnUILeftAction();
@@ -51,19 +55,18 @@ public:
 
 private:
    void HandlePageInput();
-   void HandleLegacyFlyOver();
 
    Player *m_player;
    ImVec2 m_prevMousePos;
    bool m_useFlipperNav = false;
    bool m_itemAdjustWasPressed = false;
    int m_flipperNavRepeatCount = 0;
-   uint32_t m_flipperNavStart = 0;
+   uint64_t m_flipperNavStart = 0;
    ankerl::unordered_dense::map<string, std::function<std::unique_ptr<InGameUIPage>()>> m_pages;
    vector<string> m_navigationHistory;
    InGameUIPage* m_rootPage = nullptr; // Instance of the first navigation history entry (may have been closed and discarded)
    vector<std::unique_ptr<InGameUIPage>> m_activePages;
-   uint32_t m_lastRenderMs = 0;
+   uint64_t m_lastRenderNs = 0; // SDL_GetTicksNS() of the last Update (ns, as whole ms deltas make the animations uneven at high refresh rates)
 
    // Renders the active pages; implementations selected per running target
    // (mobile touch, desktop, cabinet, VR) through InGameUIRenderer::Create

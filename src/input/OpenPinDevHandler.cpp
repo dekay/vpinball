@@ -323,9 +323,9 @@ OpenPinDevHandler::OpenPinDevHandler(InputManager &pininput)
                         {
                            sigMatch = std::wstring_view(strBuf).starts_with(L"OpenPinballDeviceStruct/"sv);
                            if (!sigMatch)
-			   {
+                           {
                               PLOGW << "Pinball Device found, but its usage string is not an Open Pinball Device signature";
-			   }
+                           }
                         }
                         else
                         {
@@ -334,7 +334,9 @@ OpenPinDevHandler::OpenPinDevHandler(InputManager &pininput)
                            // struct version 1.0.
                            // (SDL does not report the backend's error text: on Linux and macOS, this is the unsupported case above)
                            PLOGW << "Pinball Device found, but its usage string could not be read; assuming Open Pinball Device struct version 1.0";
-                           wcscpy(strBuf, L"OpenPinballDeviceStruct/1.0");
+                           static constexpr wchar_t defaultSig[] = L"OpenPinballDeviceStruct/1.0";
+                           static_assert(std::size(defaultSig) <= nStrBuf);
+                           std::copy(std::begin(defaultSig), std::end(defaultSig), strBuf);
                            sigMatch = true;
                         }
 
@@ -354,6 +356,9 @@ OpenPinDevHandler::OpenPinDevHandler(InputManager &pininput)
                            const size_t reportSize = (sizeScanner.ReportSize(hidrp::ReportType::input, f.reportID) + 7) / 8 + 1;
 
                            // Register device to the input manager
+                           // TODO merge multiple OPD units: every unit registers under the same settings id, so a second unit trips
+                           // RegisterDevice's assert, and their inputs are not merged (last change wins, a release on one unit releases
+                           // the action held on another). Update() also builds a combined report that is never used.
                            const uint16_t deviceId = m_inputManager.RegisterDevice("OpenPinDev"s, InputManager::DeviceType::OpenPinDev, "OpenPinDev"s);
                            m_inputManager.RegisterElementName(deviceId, false, 0, "Start Game"s);
                            m_inputManager.RegisterElementName(deviceId, false, 1, "Quit Game"s);
@@ -480,7 +485,7 @@ OpenPinDevHandler::OpenPinDevHandler(InputManager &pininput)
                   // stop as soon as we find a match
                   if (found)
                   {
-                     PLOGI << "OpenPinballDevice found and registered.";
+                     PLOGI << "OpenPinballDevice found and registered";
                      break;
                   }
                }

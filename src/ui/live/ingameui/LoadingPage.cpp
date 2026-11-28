@@ -7,6 +7,7 @@
 #include "core/VPApp.h"
 #include "renderer/Sampler.h"
 #include "renderer/Texture.h"
+#include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
 
 #include <algorithm>
@@ -70,22 +71,16 @@ namespace
       }
    };
 
-   void DrawSpacedText(ImDrawList* const drawList, ImFont* const font, const float fontSize, const ImVec2& center, const float spacing, const ImU32 col, const char* const text)
+   // Centered variant of the shared letter-spaced text helpers (ImGuiHelpers.h)
+   void DrawCenteredSpacedText(ImDrawList* const drawList, ImFont* const font, const float fontSize, const ImVec2& center, const float spacing, const ImU32 col, const char* const text)
    {
-      float width = -spacing;
-      for (const char* c = text; *c; c++)
-         width += font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, c, c + 1).x + spacing;
-      ImVec2 pos(center.x - width * 0.5f, center.y);
-      for (const char* c = text; *c; c++)
-      {
-         drawList->AddText(font, fontSize, pos, col, c, c + 1);
-         pos.x += font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, c, c + 1).x + spacing;
-      }
+      DrawSpacedText(drawList, font, fontSize, ImVec2(center.x - SpacedTextWidth(font, fontSize, text, spacing) * 0.5f, center.y), spacing, col, text);
    }
 }
 
-LoadingPage::LoadingPage()
+LoadingPage::LoadingPage(string caption)
    : InGameUIPage("Loading & Compressing textures..."s, ""s, SaveMode::None)
+   , m_caption(std::move(caption))
 {
 }
 
@@ -215,10 +210,13 @@ void LoadingPage::RenderLoadingScreen(const ImVec4& rect)
    if (!m_netGenerated)
       GenerateWireNet(size);
 
+   // Overall progress when covering the whole startup, else (texture compression only) the texture loading progress
    const auto& stats = m_player->m_texLoadStats;
    const uint64_t totalPixels = stats.nPixelsTotal.load(std::memory_order_relaxed);
    const uint64_t donePixels = stats.nPixelsDone.load(std::memory_order_relaxed);
-   const float progress = totalPixels > 0 ? std::clamp(static_cast<float>(donePixels) / static_cast<float>(totalPixels), 0.f, 1.f) : 0.f;
+   const float progress = m_player->m_isStartupLoading ? std::clamp(m_player->GetStartupProgress(), 0.f, 1.f)
+      : totalPixels > 0                                ? std::clamp(static_cast<float>(donePixels) / static_cast<float>(totalPixels), 0.f, 1.f)
+                                                       : 0.f;
 
    // Dark gray vertical gradient backdrop
    drawList->AddRectFilledMultiColor(origin, origin + size, IM_COL32(38, 38, 44, 255), IM_COL32(38, 38, 44, 255), IM_COL32(16, 16, 20, 255), IM_COL32(16, 16, 20, 255));
@@ -269,10 +267,11 @@ void LoadingPage::RenderLoadingScreen(const ImVec4& rect)
       drawList->AddCircleFilled(c, dotRadius * (1.f + 0.4f * l), IM_COL32(shade, shade, shade + 6, 140 + static_cast<int>(l * 60.f)));
    }
 
-   // Logo, horizontally centered in the upper mid of the screen
+   // Logo, horizontally centered in the upper mid of the screen: one of vpinball-logo1..4 picked at random (not with rand_mt, as it also drives the physics)
    if (!m_logo && !m_logoLoadFailed)
    {
-      if (std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "vpinball-logo.png")); tex != nullptr)
+      const string logoFile = "vpinball-logo" + std::to_string(1 + std::random_device{}() % 4) + ".webp";
+      if (std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, logoFile)); tex != nullptr)
          m_logo = std::make_shared<Sampler>(m_player->m_renderer->m_renderDevice, "InGameUILoadingLogo"s, tex, false);
       else
          m_logoLoadFailed = true;
@@ -300,19 +299,20 @@ void LoadingPage::RenderLoadingScreen(const ImVec4& rect)
       drawList->AddCircleFilled(ImVec2(tipX, barY), segH * 0.5f, IM_COL32(255, 255, 255, 255));
    }
 
-   // "LOADING" caption below the bar
+   // Caption below the bar: the loading phase message set by whoever opened the screen
+   // ("LOADING" while a table file is being loaded, "PREPARING" during texture compression)
+   const char* const caption = m_caption.c_str();
    ImFont* const overlayFont = m_player->m_liveUI->GetOverlayFont() ? m_player->m_liveUI->GetOverlayFont() : ImGui::GetFont();
    const float capSize = std::clamp(size.y * 0.028f, 12.f, 42.f);
-   DrawSpacedText(drawList, overlayFont, capSize, ImVec2(origin.x + size.x * 0.5f, barY + segH + size.y * 0.015f), capSize * 0.35f, IM_COL32(160, 160, 166, 255), "LOADING");
+   DrawCenteredSpacedText(drawList, overlayFont, capSize, ImVec2(origin.x + size.x * 0.5f, barY + segH + size.y * 0.015f), capSize * 0.35f, IM_COL32(160, 160, 166, 255), caption);
 
    // Bottom info bar: explains the compression process and gives access to the skip options
-   const float infoBarH = std::max(30.f, size.y * 0.05f);
-   const ImVec2 infoBarMin(origin.x, origin.y + size.y - infoBarH);
-   drawList->AddRectFilled(infoBarMin, origin + size, IM_COL32(0, 0, 0, 110));
    const bool canSkip = CanSkipCompression();
-   const string info = canSkip                                ? "Compressing textures (one-time operation, results are cached for future launches).\nYou can adjust compression settings by pressing any UI button."s
+   const string info = canSkip ? "Compressing textures (one-time operation, results are cached for future launches).\nYou can adjust compression settings by pressing any UI button."s
       : stats.skipCompression.load(std::memory_order_relaxed) ? "Loading the remaining textures with compression skipped."s
-                                                              : "Loading table textures."s;
+      : m_player->m_isStartupLoading                          ? m_player->m_startupLoadingPhase + "..."s
+      : totalPixels > 0                                       ? "Loading table textures."s
+                                                              : "Loading table."s;
    ImFont* const font = ImGui::GetFont();
    const float fontSize = ImGui::GetFontSize();
    const char* const link = canSkip ? "Options..." : nullptr;
@@ -323,7 +323,12 @@ void LoadingPage::RenderLoadingScreen(const ImVec4& rect)
    const float drawSize = fontSize * fitScale;
    const ImVec2 infoDrawSize = infoSize * fitScale;
    const ImVec2 linkDrawSize = linkSize * fitScale;
-   const float textY = infoBarMin.y + (infoBarH - drawSize) * 0.5f;
+   // The bar grows to fit the info text, which may span multiple lines
+   const float infoBarH = std::max({ 30.f, size.y * 0.05f, infoDrawSize.y + drawSize });
+   const ImVec2 infoBarMin(origin.x, origin.y + size.y - infoBarH);
+   drawList->AddRectFilled(infoBarMin, origin + size, IM_COL32(0, 0, 0, 110));
+   const float textY = infoBarMin.y + (infoBarH - infoDrawSize.y) * 0.5f;
+   const float linkY = infoBarMin.y + (infoBarH - linkDrawSize.y) * 0.5f;
    float textX = origin.x + (size.x - infoDrawSize.x - gap - linkDrawSize.x) * 0.5f;
    drawList->AddText(font, drawSize, ImVec2(textX, textY), IM_COL32(140, 140, 146, 255), info.c_str());
    textX += infoDrawSize.x + gap;
@@ -334,8 +339,8 @@ void LoadingPage::RenderLoadingScreen(const ImVec4& rect)
       ImGui::SetCursorScreenPos(ImVec2(textX, infoBarMin.y));
       ImGui::InvisibleButton("##LoadingOptions", ImVec2(linkDrawSize.x, infoBarH));
       const ImU32 linkCol = interactive && ImGui::IsItemHovered() ? IM_COL32(235, 235, 240, 255) : IM_COL32(190, 190, 198, 255);
-      drawList->AddText(font, drawSize, ImVec2(textX, textY), linkCol, link);
-      drawList->AddLine(ImVec2(textX, textY + drawSize + 1.f), ImVec2(textX + linkDrawSize.x, textY + drawSize + 1.f), linkCol);
+      drawList->AddText(font, drawSize, ImVec2(textX, linkY), linkCol, link);
+      drawList->AddLine(ImVec2(textX, linkY + drawSize + 1.f), ImVec2(textX + linkDrawSize.x, linkY + drawSize + 1.f), linkCol);
       if (interactive && ImGui::IsItemClicked())
          OpenSkipOptions();
    }

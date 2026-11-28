@@ -74,7 +74,8 @@ public:
       EditPOV,
       LiveEdit,
       FullEdit,
-      CaptureAttract
+      CaptureAttract,
+      Frontend // Mini frontend session, running on a synthetic empty table (no table file loaded)
    };
 
    // Overrides for the PlayerVR.AskToTurnOn setting (and the forced-off rule of the edit modes) when a
@@ -98,6 +99,7 @@ public:
    bool IsPlaying(const bool applyWndFocus = true) const { return (m_playMode == PlayMode::CaptureAttract) || (m_wantsToPlay && ((applyWndFocus && !s_ignoreWndFocus) ? m_playfieldWnd->IsFocused() : true) && !IsEditorMode()); }
    static inline bool s_ignoreWndFocus = false; // Automated runs (vpx-test): keep playing (no pause, no pause overlay) when the playfield window is not focused
    void OnFocusChanged(); // On focus lost, pause player and show mouse cursor
+   void ShowTouchControlsHint(); // First launches with a touch screen: present the touch controls
    bool ShouldHideDesktopCursor() const; // In VR, only hide the shared OS cursor when the desktop display presents a game surface (cabinet / cabinet+ancillary scene render)
 
    uint32_t m_pauseTimeTarget = 0;
@@ -197,6 +199,11 @@ private:
 
    void LockRenderThread();   // Wait for the render thread to be idle and take ownership of the render frame (BGFX only)
    void UnlockRenderThread(); // Release render frame ownership, letting the game loop resume (BGFX only)
+   // Startup loading screen (BGFX, not in the mobile apps or the editor): shown after the physics initialization until the game starts.
+   // The startup phases block the main thread, so frames are only rendered between them (continuously during the texture loading)
+   void BeginStartupLoadingScreen();
+   void UpdateStartupLoadingScreen(const string& phase);
+   void EndStartupLoadingScreen();
 
 public:
    // Stats shared between the texture loading worker threads and the loading UI
@@ -223,6 +230,9 @@ public:
    };
    TextureLoadStats m_texLoadStats;
    bool m_isLoading = false; // True while the initial table content is being loaded (the loading UI is displayed instead of the game)
+   bool m_isStartupLoading = false; // True while the loading UI covers the whole startup (see BeginStartupLoadingScreen), not only the texture compression
+   string m_startupLoadingPhase; // Startup phase shown by the loading UI (main thread only)
+   float GetStartupProgress() const { return m_loadProgress->GetProgress() / 100.f; } // Overall startup progress, 0..1
 
    uint64_t m_timeUpdateTimeStamp = 0; // Timestamp in computer time that correspond to last update of game time
    double m_time_sec = 0.0; // current physics time

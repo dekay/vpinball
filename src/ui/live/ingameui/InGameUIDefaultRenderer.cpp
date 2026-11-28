@@ -10,6 +10,7 @@
 
 #include "core/player.h"
 #include "core/VPApp.h"
+#include "ui/live/frontend/FrontendDesktopRenderer.h"
 #include "ui/live/IconsLucide.h"
 #include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
@@ -24,9 +25,14 @@ std::unique_ptr<InGameUIRenderer> InGameUIRenderer::Create(InGameUI& owner)
 {
    // The desktop renderer covers all non-touch targets, adapting its layout to
    // the playfield frame (landscape, portrait FSS, portrait cabinet inset). VR
-   // gets it too: the view-locked UI layer is a 16:9 surface, so the landscape
-   // layout applies there as well. Mobile touch keeps the pinball card layout.
-   if (!g_isMobile)
+   // gets it too: the UI quad is a 16:9 surface, so the landscape
+   // layout applies there as well, including on mobile VR devices. Mobile
+   // touch outside VR keeps the pinball card layout.
+   // The mini frontend session gets the frontend chrome: the same desktop
+   // renderer extended with the catalog's own tab arrangement.
+   if (!g_isMobile && g_pplayer->m_playMode == Player::PlayMode::Frontend)
+      return std::make_unique<Frontend::FrontendDesktopRenderer>(owner);
+   if (!g_isMobile || g_pplayer->IsVR())
       return std::make_unique<InGameUIDesktopRenderer>(owner);
    return std::make_unique<InGameUIDefaultRenderer>(owner);
 }
@@ -72,7 +78,7 @@ void InGameUIDefaultRenderer::RenderPage(InGameUIPage& page, float elapsedS)
 
    const float animPos = page.GetOpenCloseAnimPos();
 
-   ImGui::SetNextWindowBgAlpha(m_player->m_renderer->m_vrApplyColorKey ? 1.f : 0.666f);
+   ImGui::SetNextWindowBgAlpha(m_player->IsVR() ? 1.f : 0.666f);
    // Size is selected to match pinball instruction cards format which have an aspect ratio of roughly 6" x 3.25" (WPC, other varies), except for mobile where we favor size
    constexpr float pinballCardAR = 6.f / 3.5f;
    ImVec2 winSize;
@@ -266,6 +272,17 @@ void InGameUIDefaultRenderer::RenderPage(InGameUIPage& page, float elapsedS)
    // Indent the item content so the item highlight quads (drawn from the child's left edge) have a left padding
    ImGui::Indent(itemPadding.x);
 
+   // Header panes are drawn at the top of the item list (e.g. the input device diagram)
+   for (const InGameUIPane& pane : panes)
+      if (pane.placement == InGameUIPane::Placement::Header && pane.render)
+      {
+         const ImVec2 avail = ImGui::GetContentRegionAvail();
+         const ImVec2 paneSize = pane.measure ? pane.measure(avail.x, avail.y * 0.5f) : ImVec2(avail.x, avail.y * 0.4f);
+         const ImVec2 panePos = ImGui::GetCursorScreenPos();
+         pane.render(ImVec4(panePos.x, panePos.y, paneSize.x, paneSize.y));
+         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + paneSize.y + ImGui::GetStyle().ItemSpacing.y);
+      }
+
    // Drag scroll for easier mobile navigation
    if (g_isMobile)
    {
@@ -433,8 +450,6 @@ void InGameUIDefaultRenderer::RenderPage(InGameUIPage& page, float elapsedS)
             if (IconButtonInk(ICON_LC_X, std::format("##Item{:d}", i).c_str()))
             {
                item->m_inputAction->ClearMapping();
-               if (item->m_inputAction->IsNavigationAction())
-                  page.RequestInputActionPopup(*item);
             }
             ImGui::SameLine();
          }
@@ -512,7 +527,7 @@ void InGameUIDefaultRenderer::RenderPage(InGameUIPage& page, float elapsedS)
                ImGui::SetNextItemWidth(itemFieldEndScreenX - ImGui::GetCursorScreenPos().x - ImGui::GetStyle().ItemSpacing.x - butWidth);
                ImGui::InputInt(std::format("##Item{}", i).c_str(), &v, 1, 100, ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                ImGui::SameLine();
-               if (IconButtonInk((Settings::m_propPlayer_PlayfieldWidth.index == id.value().index) ? ICON_LC_MOVE_HORIZONTAL : ICON_LC_MOVE_VERTICAL, std::format("##Item{}", i).c_str()))
+               if (IconButtonInk((Settings::m_propPlayer_PlayfieldWidth.index == id.value().index) ? ICON_LC_MOVE_HORIZONTAL : ICON_LC_MOVE_VERTICAL, std::format("##FillItem{}", i).c_str()))
                   v = prop->m_max;
             }
             else
@@ -609,7 +624,7 @@ void InGameUIDefaultRenderer::RenderPage(InGameUIPage& page, float elapsedS)
                ImGui::SetNextItemWidth(itemFieldEndScreenX - ImGui::GetCursorScreenPos().x - browseButtonWidth - style.ItemSpacing.x);
                ImGui::InputTextWithHint(std::format("##Item{}", i).c_str(), hint, &v);
                ImGui::SameLine();
-               if (IconButtonInk(browseIcon, std::format("##Item{}", i).c_str()))
+               if (IconButtonInk(browseIcon, std::format("##BrowseItem{}", i).c_str()))
                   page.BrowseForPath(*item);
                if (ImGui::IsItemHovered())
                   ImGui::SetTooltip("%s", hint);

@@ -35,7 +35,7 @@ namespace B2S
 static const char* usedLEDTypeValues[] = { "Auto", "Rendered", "Dream7" };
 MSGPI_ENUM_VAL_SETTING(usedLEDTypeProp, "UsedLEDType", "Used LED type", "Force the LED display type (Auto = as declared by the .directb2s file)", true, 0, 3, usedLEDTypeValues, 0);
 MSGPI_INT_VAL_SETTING(allAnimationSlowDownProp, "AllAnimationSlowDown", "Global animation slowdown", "Slowdown factor applied to all backglass animations", true, 1, 100, 1);
-MSGPI_STRING_VAL_SETTING(animationSlowDownsProp, "AnimationSlowDowns", "Per-animation slowdowns", "Semicolon separated 'name=factor' animation slowdown overrides", true, "", 1024);
+MSGPI_STRING_VAL_SETTING(animationSlowDownsProp, "AnimationSlowDowns", "Per-animation slowdowns", "Semicolon separated 'name=factor' animation slowdown overrides (not used when the global animation slowdown is above 1)", true, "", 1024);
 
 void B2SServer::RegisterSettings(const MsgPluginAPI* const msgApi, unsigned int endpointId)
 {
@@ -84,27 +84,29 @@ namespace
       PagedUIItemDef& ledType = items[pos++];
       ledType = {};
       ledType.type = PAGEDUI_ITEM_ENUM;
-      ledType.id = "UsedLEDType";
-      ledType.label = "Used LED type";
-      ledType.tooltip = "Force the LED display type (Auto = as declared by the .directb2s file)";
+      ledType.id = usedLEDTypeProp.propId;
+      ledType.label = usedLEDTypeProp.name;
+      ledType.tooltip = usedLEDTypeProp.description;
       ledType.storage = PAGEDUI_STORAGE_HOST;
-      ledType.enumProp = { 0, 3, usedLEDTypeValues, 0, &LedTypeGet, &LedTypeSet };
+      ledType.enumProp = { usedLEDTypeProp.intDef.minVal, usedLEDTypeProp.intDef.maxVal - usedLEDTypeProp.intDef.minVal + 1, usedLEDTypeProp.intDef.values, usedLEDTypeProp.intDef.defVal,
+         &LedTypeGet, &LedTypeSet };
       PagedUIItemDef& allSlowdown = items[pos++];
       allSlowdown = {};
       allSlowdown.type = PAGEDUI_ITEM_INT;
-      allSlowdown.id = "AllAnimationSlowDown";
-      allSlowdown.label = "Global animation slowdown";
-      allSlowdown.tooltip = "Slowdown factor applied to all backglass animations";
+      allSlowdown.id = allAnimationSlowDownProp.propId;
+      allSlowdown.label = allAnimationSlowDownProp.name;
+      allSlowdown.tooltip = allAnimationSlowDownProp.description;
       allSlowdown.storage = PAGEDUI_STORAGE_HOST;
-      allSlowdown.intProp = { 1, 100, 1, nullptr, &AllSlowdownGet, &AllSlowdownSet };
+      allSlowdown.intProp
+         = { allAnimationSlowDownProp.intDef.minVal, allAnimationSlowDownProp.intDef.maxVal, allAnimationSlowDownProp.intDef.defVal, nullptr, &AllSlowdownGet, &AllSlowdownSet };
       PagedUIItemDef& slowdowns = items[pos++];
       slowdowns = {};
       slowdowns.type = PAGEDUI_ITEM_STRING;
-      slowdowns.id = "AnimationSlowDowns";
-      slowdowns.label = "Per-animation slowdowns";
-      slowdowns.tooltip = "Semicolon separated 'name=factor' animation slowdown overrides";
+      slowdowns.id = animationSlowDownsProp.propId;
+      slowdowns.label = animationSlowDownsProp.name;
+      slowdowns.tooltip = animationSlowDownsProp.description;
       slowdowns.storage = PAGEDUI_STORAGE_HOST;
-      slowdowns.stringProp = { "", &SlowdownsGet, &SlowdownsSet };
+      slowdowns.stringProp = { animationSlowDownsProp.stringDef.defVal, &SlowdownsGet, &SlowdownsSet };
       FillHeader(items[pos++], "Modify Backglass");
    }
 

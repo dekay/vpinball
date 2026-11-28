@@ -28,6 +28,9 @@ public:
    virtual void Save();
    bool IsActive() const { return m_openAnimTarget == 0.f; }
    bool IsClosed() const { return (m_openAnimPos == m_openAnimTarget) && (m_openAnimPos == -1.f || m_openAnimPos == 1.f); }
+   // Whether Update() ran at least once: a page closed before its first update must still be
+   // rendered once — the renderer caches its items to lay out the navigation sections
+   bool WasUpdated() const { return m_wasUpdated; }
    virtual void SaveGlobally();
    virtual void SaveTableOverride();
    virtual void ResetToStoredValues();
@@ -57,6 +60,8 @@ public:
    InGameUIItem* GetItem(const string& label) const;
 
    virtual bool IsPlayerPauseAllowed() const { return true; }
+   // Whether Update appends the standard Back/reset/undo/save action items
+   virtual bool UsesStandardActionItems() const { return true; }
    // Whether the page may be left through Back while the player is loading a table (the loading screen is the navigation root and cannot be closed)
    virtual bool IsBackAllowedWhileLoading() const { return false; }
 
@@ -87,7 +92,7 @@ public:
    // API used by InGameUIRenderer implementations
 
    const string& GetTitle() const { return m_title; }
-   const string& GetInfo() const { return m_info; }
+   virtual const string& GetInfo() const { return m_info; }
    SaveMode GetSaveMode() const { return m_saveMode; }
    const vector<std::unique_ptr<InGameUIItem>>& GetItems() const { return m_items; }
    int GetSelectedItemIndex() const { return m_selectedItem; }
@@ -105,8 +110,7 @@ public:
    // Scroll offset of the selected scrollable (markdown) item, shared with AdjustItem
    float GetItemScroll() const { return m_pressedItemScroll; }
    void SetItemScroll(float scroll) { m_pressedItemScroll = scroll; }
-   // Key binding popup: the page keeps the request state and the policy that a
-   // navigation action must always be bound; the renderer draws the modal.
+   // Key binding popup: the page keeps the request state; the renderer draws the modal.
    void RequestInputActionPopup(InGameUIItem& item)
    {
       m_defineActionPopup = true;
@@ -121,7 +125,11 @@ public:
    }
    void BrowseForPath(const InGameUIItem& item);
 
+   // Seconds since the page creation, for plots (relative, to keep the float precision)
+   float GetPlotTime() const { return static_cast<float>(static_cast<double>(SDL_GetTicksNS() - m_creationTimeNs) / 1000000000.); }
+
 private:
+   const uint64_t m_creationTimeNs = SDL_GetTicksNS();
    bool HasSelectableItem() const; // Selection loops search for a selectable item, so they must not run without one
 
    const string m_title;
@@ -140,13 +148,14 @@ private:
    float m_openAnimStart = -1.f;
    float m_openAnimTarget = -1.f;
    float m_openAnimElapsed = 0.f;
+   bool m_wasUpdated = false; // Set by Update(): gating reaping on it keeps a never-rendered page alive one frame
 
    ImVec2 m_windowPos = ImVec2(0.f, 0.f);
    ImVec2 m_windowSize = ImVec2(0.f, 0.f);
    bool m_windowHovered = false;
    float m_adjustedValue = 0.f;
-   uint32_t m_lastUpdateMs = 0;
-   uint32_t m_pressStartMs = 0;
+   uint64_t m_lastUpdateNs = 0; // SDL_GetTicksNS() of the last held adjustment step
+   uint64_t m_pressStartMs = 0;
    string m_pressedItemLabel;
    float m_pressedItemScroll = 0.f;
    vector<std::unique_ptr<InGameUIItem>> m_items;

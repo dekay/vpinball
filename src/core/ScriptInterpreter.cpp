@@ -83,8 +83,8 @@ ScriptInterpreter::~ScriptInterpreter()
       if (state != SCRIPTSTATE_CLOSED && state != SCRIPTSTATE_UNINITIALIZED)
       {
          m_pScript->Close();
-         const uint32_t startWaitTick = msec();
-         while ((msec() - startWaitTick < 5000) && (state != SCRIPTSTATE_CLOSED))
+         const uint64_t startWaitTick = SDL_GetTicks();
+         while ((SDL_GetTicks() - startWaitTick < 5000) && (state != SCRIPTSTATE_CLOSED))
          {
             Sleep(16);
             m_pScript->GetScriptState(&state);
@@ -146,8 +146,8 @@ void ScriptInterpreter::Stop(PinTable *table)
    if (state != SCRIPTSTATE_CLOSED && state != SCRIPTSTATE_UNINITIALIZED)
    {
       m_pScript->Close();
-      const uint32_t startWaitTick = msec();
-      while ((msec() - startWaitTick < 5000) && (state != SCRIPTSTATE_CLOSED))
+      const uint64_t startWaitTick = SDL_GetTicks();
+      while ((SDL_GetTicks() - startWaitTick < 5000) && (state != SCRIPTSTATE_CLOSED))
       {
          Sleep(16);
          m_pScript->GetScriptState(&state);
@@ -207,7 +207,7 @@ void ScriptInterpreter::HangWatchLoop()
          hangReported = false;
          continue;
       }
-      if (usec() - m_scriptEnterUsec < s_hangWatchTimeoutUsec)
+      if (SDL_GetTicksNS() / 1000 - m_scriptEnterUsec < s_hangWatchTimeoutUsec)
       {
          hangReported = false;
          continue;
@@ -220,14 +220,19 @@ void ScriptInterpreter::HangWatchLoop()
       EXCEPINFO eiInterrupt = {};
       eiInterrupt.bstrDescription = MakeWideBSTR(LocalStringW(IDS_HANG).m_buffer);
       eiInterrupt.wCode = 2345;
+      // Raised before the call: the script thread only reads it when entering its next script call, after the interrupted one has unwound
+      m_hangInterrupted = true;
       const HRESULT hr = m_pScript->InterruptScriptThread(SCRIPTTHREADID_BASE /*SCRIPTTHREADID_ALL*/, &eiInterrupt, /*SCRIPTINTERRUPT_DEBUG*/ SCRIPTINTERRUPT_RAISEEXCEPTION);
       SysFreeString(eiInterrupt.bstrDescription);
-      if (FAILED(hr))
+      if (hr == E_NOTIMPL)
       {
-         // e.g. libwinevbs stubs InterruptScriptThread out: the hang is reported but the script cannot be unwound
-         PLOGE << "Script engine does not support interrupting a running script (InterruptScriptThread failed)";
+         m_hangInterrupted = false;
+         PLOGE << "Script engine does not support interrupting a running script (InterruptScriptThread is not implemented)";
          break;
       }
+      // Any other failure means that the script call returned in the meantime: nothing was interrupted
+      if (FAILED(hr))
+         m_hangInterrupted = false;
    }
 }
 
@@ -236,7 +241,7 @@ void ScriptInterpreter::ExitScriptModal()
    if (m_scriptModalCount > 0)
       m_scriptModalCount--;
    // a script call may go on after the modal state: restart the hang timeout (script thread, like OnEnterScript)
-   m_scriptEnterUsec = usec();
+   m_scriptEnterUsec = SDL_GetTicksNS() / 1000;
 }
 
 void ScriptInterpreter::AddItem(const wstring& name, IDispatch *dispatch, const bool global)
@@ -479,7 +484,15 @@ STDMETHODIMP ScriptInterpreter::OnEnterScript()
    // thread, so the enter timestamp is stored before the depth is raised, ensuring the watchdog never
    // sees a nonzero depth without a fresh timestamp.
    if (m_scriptCallDepth == 0)
-      m_scriptEnterUsec = usec();
+   {
+#ifdef __STANDALONE__
+      // The engine stays interrupted after the hang watchdog unwound a script call, failing every later call, until
+      // its state is set again: do it before running the next call, so that only the hanging call is aborted
+      if (m_hangInterrupted.exchange(false) && m_pScript)
+         m_pScript->SetScriptState(SCRIPTSTATE_CONNECTED);
+#endif
+      m_scriptEnterUsec = SDL_GetTicksNS() / 1000;
+   }
    m_scriptCallDepth++;
    return S_OK;
 }

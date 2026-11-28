@@ -159,7 +159,7 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
 
    curl -sL https://github.com/bkaradzic/bgfx.cmake/releases/download/v${BGFX_CMAKE_VERSION}/bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz -o bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
    tar xzf bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
-   curl -sL https://github.com/vbousquet/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
+   curl -sL https://github.com/vpinball/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
    tar xzf bgfx-${BGFX_PATCH_SHA}.tar.gz
    cd bgfx.cmake
    rm -rf bgfx
@@ -245,7 +245,8 @@ if [ "${ZLIB_EXPECTED_SHA}" != "${ZLIB_FOUND_SHA}" ]; then
    cd zlib
    emcmake cmake \
       -DBUILD_SHARED_LIBS=OFF \
-      -DZLIB_BUILD_EXAMPLES=OFF \
+      -DZLIB_BUILD_SHARED=OFF \
+      -DZLIB_BUILD_TESTING=OFF \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
@@ -430,7 +431,8 @@ fi
 # build ffmpeg
 #
 
-FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}"
+# Decoding of local media files only: no network (protocols), encoders or muxers
+FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}_001"
 FFMPEG_FOUND_SHA="$([ -f ffmpeg/cache.txt ] && cat ffmpeg/cache.txt || echo "")"
 
 if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
@@ -459,6 +461,9 @@ if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
       --enable-static \
       --disable-shared \
       --disable-programs \
+      --disable-network \
+      --disable-encoders \
+      --disable-muxers \
       --disable-doc \
       --disable-avdevice \
       --disable-avfilter \

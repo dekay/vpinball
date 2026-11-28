@@ -16,7 +16,7 @@ namespace B2S {
 // sRGB to linear conversion (duplicate from the main VPX codebase, see utils/color.h)
 static inline float InvsRGB(const float x) { return (x <= 0.04045f) ? (x * (float)(1.0 / 12.92)) : (powf(x * (float)(1.0 / 1.055) + (float)(0.055 / 1.055), 2.4f)); }
 
-MSGPI_BOOL_VAL_SETTING(showGrillProp, "ShowGrill", "Show Grill", "Show Grill", true, false);
+MSGPI_BOOL_VAL_SETTING(showGrillProp, "ShowGrill", "Show Grill", "Show the grill part at the bottom of the backglass image (when disabled, it is cropped)", true, false);
 MSGPI_BOOL_VAL_SETTING(upgradedSegRenderingProp, "UpgradedSegmentRendering", "Upgraded segment rendering",
    "Render LED score displays with the upgraded segment renderer (turn off for the original B2S segment rendering)", true, true);
 
@@ -115,25 +115,26 @@ int B2SRenderer::FillSettingsItems(PagedUIItemDef* items)
 {
    items[0] = {};
    items[0].type = PAGEDUI_ITEM_BOOL;
-   items[0].id = "ShowGrill";
-   items[0].label = "Show Grill";
-   items[0].tooltip = "Show Grill";
+   items[0].id = showGrillProp.propId;
+   items[0].label = showGrillProp.name;
+   items[0].tooltip = showGrillProp.description;
    items[0].storage = PAGEDUI_STORAGE_HOST;
-   items[0].boolProp = { 0, &ShowGrillGet, &ShowGrillSet };
+   items[0].boolProp = { showGrillProp.boolDef.defVal, &ShowGrillGet, &ShowGrillSet };
    items[1] = {};
    items[1].type = PAGEDUI_ITEM_ENUM;
-   items[1].id = "DualMode";
-   items[1].label = "Dual Mode";
-   items[1].tooltip = "Active mode for dual backglasses (authentic or fantasy)";
+   items[1].id = dualModeProp.propId;
+   items[1].label = dualModeProp.name;
+   items[1].tooltip = dualModeProp.description;
    items[1].storage = PAGEDUI_STORAGE_HOST;
-   items[1].enumProp = { 1, 2, dualModeValues, 1, &DualModeGet, &DualModeSet };
+   items[1].enumProp
+      = { dualModeProp.intDef.minVal, dualModeProp.intDef.maxVal - dualModeProp.intDef.minVal + 1, dualModeProp.intDef.values, dualModeProp.intDef.defVal, &DualModeGet, &DualModeSet };
    items[2] = {};
    items[2].type = PAGEDUI_ITEM_BOOL;
-   items[2].id = "UpgradedSegmentRendering";
-   items[2].label = "Upgraded segment rendering";
-   items[2].tooltip = "Render LED score displays with the upgraded segment renderer (turn off for the original B2S segment rendering)";
+   items[2].id = upgradedSegRenderingProp.propId;
+   items[2].label = upgradedSegRenderingProp.name;
+   items[2].tooltip = upgradedSegRenderingProp.description;
    items[2].storage = PAGEDUI_STORAGE_HOST;
-   items[2].boolProp = { 1, &UpgradedSegGet, &UpgradedSegSet };
+   items[2].boolProp = { upgradedSegRenderingProp.boolDef.defVal, &UpgradedSegGet, &UpgradedSegSet };
    return 3;
 }
 
@@ -712,8 +713,8 @@ void B2SRenderer::RenderLegacyScoreDisplay(VPXRenderContext2D* ctx, B2SServer* s
       const uint8_t darkR = static_cast<uint8_t>(std::clamp(reel.m_reelDarkColor.x * 255.f + 0.5f, 0.f, 255.f));
       const uint8_t darkG = static_cast<uint8_t>(std::clamp(reel.m_reelDarkColor.y * 255.f + 0.5f, 0.f, 255.f));
       const uint8_t darkB = static_cast<uint8_t>(std::clamp(reel.m_reelDarkColor.z * 255.f + 0.5f, 0.f, 255.f));
-      const uint32_t litColor = seg::RGB(litR, litG, litB);
-      const uint32_t darkColor = seg::RGB(darkR, darkG, darkB);
+      const uint32_t litColor = seg::ColorRGB(litR, litG, litB);
+      const uint32_t darkColor = seg::ColorRGB(darkR, darkG, darkB);
       if (dream7)
       {
          auto d7 = std::make_unique<seg::Dream7Display>(m_vpxApi);
@@ -724,8 +725,8 @@ void B2SRenderer::RenderLegacyScoreDisplay(VPXRenderContext2D* ctx, B2SServer* s
          d7->SetSpacing(static_cast<float>(reel.m_spacing) * 5.f);
          // Reference color wiring: the glass colors derive from the authored lit segment color
          d7->SetLightColor(litColor);
-         d7->SetGlassColor(seg::RGB(static_cast<uint8_t>(std::min(255, litR + 50)), static_cast<uint8_t>(std::min(255, litG + 50)), static_cast<uint8_t>(std::min(255, litB + 50))));
-         d7->SetGlassColorCenter(seg::RGB(static_cast<uint8_t>(std::min(255, litR + 70)), static_cast<uint8_t>(std::min(255, litG + 70)), static_cast<uint8_t>(std::min(255, litB + 70))));
+         d7->SetGlassColor(seg::ColorRGB(static_cast<uint8_t>(std::min(255, litR + 50)), static_cast<uint8_t>(std::min(255, litG + 50)), static_cast<uint8_t>(std::min(255, litB + 50))));
+         d7->SetGlassColorCenter(seg::ColorRGB(static_cast<uint8_t>(std::min(255, litR + 70)), static_cast<uint8_t>(std::min(255, litG + 70)), static_cast<uint8_t>(std::min(255, litB + 70))));
          d7->SetOffColor(darkColor);
          d7->SetGlassAlpha(140);
          d7->SetGlassAlphaCenter(255);

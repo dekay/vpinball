@@ -17,6 +17,13 @@ FEATURES:
 - add -v command line option to just output the version and quit
 - add -CaptureAttract command line option to automatically capture an attract video
 - add -Convert command line option to convert a table between the .vpx and .vpz pack file formats
+- add -Frontend command line option to start into a new mini frontend (see docs/Frontend.md):
+  . scans the folders listed in the 'Frontend.TableFolders' setting for tables, .info files and medias, and presents them as a table wheel
+  . adapts its layout to the setup: cabinet (media broadcasted to the other displays), desktop, full single screen/mobile (touch), and XR on builds with OpenXR support
+  . tables are launched from the frontend and quitting them returns to it; tables can also be opened in the live editor
+  . table .info files can be edited, and playfield/backglass medias can be captured from a table session
+  . the frontend is opt-in for now: 'vpx' without command still starts the Windows editor
+  . themable layout: themes made of aspect ratio variant images (color keyed layout map plus optional under/overlay) are selected per display and managed from the settings; a 'base' theme is bundled
 
 - Folder layout has been redesigned:
   . Folder layout now conforms to platform requirements, with the application stored in its read-only application folder (for example 'C:\Program Files' under Windows),
@@ -65,6 +72,7 @@ FEATURES:
 - improved ball trail, also exposing strength control
 - the balls are now raytraced analytically per pixel (exact silhouette and shading, no more mesh facets)
 - also add a raytraced/true ball motion blur (BGFX only, not supported in VR or headtracking)
+- native ball shadows for certain bulb lights can now optionally be auto-enabled for pre-10.8 era tables (default off to avoid potential compatibility issues, see setting in UI)
 
 - nudging was redesigned with support for the following modes:
   . gamecontroller nudge, a new mode designed for gamepads and VR controllers, which evaluates the intent of the player from stick moves and uses a simulated cabinet model to emulate the nudge physically plausible
@@ -238,7 +246,7 @@ FEATURES:
   . 'Round Wall' tool,
   . Measure mode
   . Blender-style sidebar and orthographic views
-  . Note that many settings like rumble, legacy fly-over and VR mode moved to the InGameUI and the toolbar (e.g. the player options dialog was removed)
+  . Note that many settings like rumble and VR mode moved to the InGameUI and the toolbar (e.g. the player options dialog was removed)
 
  - InGameUI (via default 'F12' ingame):
   . Supports all player modes (VR, XR, cabinet, desktop) and all screen orientations
@@ -246,6 +254,7 @@ FEATURES:
   . Add settings pages, moving lots of settings inside these pages
   . Add a system info page, displaying some details of the GPU,CPU,Display,Audio,etc, and the paths used to load the various components
   . Navigation using flipper input has been unified: per default, magna buttons allow to move, while flipper buttons allow to select
+  . the legacy fly-over camera mode has been removed, replaced by the LiveUI fly camera
 
  - a cross-platform script debugger is available in the LiveUI, replacing the previous Windows-only debugger dialog
 

@@ -171,7 +171,7 @@ void NudgeSensorSettingsPage::Close(bool isBackwardAnimation)
 
 void NudgeSensorSettingsPage::AppendPlot()
 {
-   const float t = static_cast<float>((double)msec() / 1000.);
+   const float t = GetPlotTime();
    constexpr float g = 9.80665f;
 
    Vertex2D nudge = m_player->m_pininput.m_nudgeHandler->GetCabinetAcceleration();
@@ -199,7 +199,7 @@ void NudgeSensorSettingsPage::Update(float elapsedS)
    if (m_removed)
       return;
 
-   if (const uint32_t ms = msec(); ms - m_resetTimestampMs > 2000)
+   if (const uint64_t ms = SDL_GetTicks(); ms - m_resetTimestampMs > 2000)
    {
       m_resetTimestampMs = ms;
       m_sensorAcqPeriod.x = 0;
@@ -277,7 +277,7 @@ void NudgeSensorSettingsPage::RenderSensorPlots(const ImVec4& rect)
 
    const auto& sensor = GetSensor();
 
-   ImGui::PushFont(nullptr, style.FontSizeBase * 0.5f); // Smaller font to keep graphics readable
+   ImGui::PushFont(nullptr, style.FontSizeBase); // Base font size for legible axis and legend text
    if (ImPlot::BeginPlot("##NudgeX", ImVec2(plotWidth, plotHeight), ImPlotFlags_None))
    {
       ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_NoTickLabels);
@@ -378,7 +378,7 @@ void NudgeSensorSettingsPage::RenderSensorPlots(const ImVec4& rect)
       ImGui::PopStyleVar();
    }
 
-   ImGui::PushFont(nullptr, style.FontSizeBase * 0.5f); // Smaller font to keep graphics readable
+   ImGui::PushFont(nullptr, style.FontSizeBase); // Base font size for legible axis and legend text
    if (ImPlot::BeginPlot("##NudgeY", ImVec2(plotWidth, plotHeight), ImPlotFlags_None))
    {
       ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_NoTickLabels);

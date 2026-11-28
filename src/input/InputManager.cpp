@@ -29,6 +29,9 @@
 #if !defined(__LIBVPINBALL__) && !defined(__EMSCRIPTEN__)
    #include "input/OpenPinDevHandler.h"
 #endif
+#ifdef __EMSCRIPTEN__
+   #include <emscripten.h>
+#endif
 
 
 InputManager::InputManager(Player* player, Settings& appSettings)
@@ -58,21 +61,48 @@ InputManager::InputManager(Player* player, Settings& appSettings)
    }
    if (touchDevices)
       SDL_free(touchDevices);
-   auto addTouchRegion = [this](const RECT& region, unsigned int actionId) { m_touchRegionMap.emplace_back(region, actionId, m_inputActions[actionId]->NewDirectStateSlot()); };
+#ifdef _WIN32
+   // SDL only reports a Windows touch screen once used (see OnTouchScreenUsed): ask the system for a touch digitizer
+   // (Windows 7+ values, hidden by the Vista _WIN32_WINNT target; GetSystemMetrics returns 0 on older systems)
+   constexpr int smDigitizer = 94; // SM_DIGITIZER
+   constexpr int nidIntegratedTouch = 0x01, nidExternalTouch = 0x02, nidReady = 0x80; // NID_INTEGRATED_TOUCH, NID_EXTERNAL_TOUCH, NID_READY
+   if (const int digitizer = GetSystemMetrics(smDigitizer); !m_supportsTouch && (digitizer & nidReady) && (digitizer & (nidIntegratedTouch | nidExternalTouch)))
+   {
+      PLOGI << "Touch screen reported by the system - Enabling touch support";
+      m_supportsTouch = true;
+   }
+#elif defined(__EMSCRIPTEN__)
+   // Same for the browser (SDL adds the touch device on the first touch pointer event)
+   if (!m_supportsTouch && EM_ASM_INT({ return navigator.maxTouchPoints > 0 ? 1 : 0; }) != 0)
+   {
+      PLOGI << "Touch screen reported by the browser - Enabling touch support";
+      m_supportsTouch = true;
+   }
+#endif
+   auto addTouchRegion = [this](const RECT& region, unsigned int actionId, const string& label)
+   { m_touchRegionMap.emplace_back(region, actionId, m_inputActions[actionId]->NewDirectStateSlot(), label); };
    // RECT definition is left, top, right, bottom in % of screen
-   addTouchRegion(RECT { 0, 0, 50, 10 }, GetAddCreditActionId(0));
-   addTouchRegion(RECT { 50, 0, 100, 10 }, GetOpenInGameUIActionId());
-   addTouchRegion(RECT { 0, 10, 50, 30 }, GetLeftMagnaActionId());
-   addTouchRegion(RECT { 50, 10, 100, 30 }, GetRightMagnaActionId());
-   addTouchRegion(RECT { 0, 30, 50, 60 }, GetLeftNudgeActionId());
-   addTouchRegion(RECT { 50, 30, 100, 60 }, GetRightNudgeActionId());
-   addTouchRegion(RECT { 0, 60, 30, 90 }, GetLeftFlipperActionId());
-   addTouchRegion(RECT { 0, 60, 30, 90 }, GetStagedLeftFlipperActionId());
-   addTouchRegion(RECT { 30, 60, 70, 100 }, GetCenterNudgeActionId());
-   addTouchRegion(RECT { 70, 60, 100, 90 }, GetRightFlipperActionId());
-   addTouchRegion(RECT { 70, 60, 100, 90 }, GetStagedRightFlipperActionId());
-   addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
-   addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
+   // Touch regions, in percent of the playfield view (left, top, right, bottom), from top to bottom:
+   // - 0..10:   Credit, Extra Ball (buy-in), Menu
+   // - 10..50:  Left / Right Nudge
+   // - 50..80:  Left Flipper, Center Nudge, Right Flipper (the staged flippers share the flipper areas)
+   // - 80..90:  Left Magna, Lockbar, Right Magna
+   // - 90..100: Start, Lockbar, Plunger
+   addTouchRegion(RECT { 0, 0, 25, 10 }, GetAddCreditActionId(0), "Credit"s);
+   addTouchRegion(RECT { 25, 0, 50, 10 }, GetExtraBallActionId(), "Extra Ball"s);
+   addTouchRegion(RECT { 50, 0, 100, 10 }, GetOpenInGameUIActionId(), "Menu"s);
+   addTouchRegion(RECT { 0, 10, 50, 50 }, GetLeftNudgeActionId(), "Left Nudge"s);
+   addTouchRegion(RECT { 50, 10, 100, 50 }, GetRightNudgeActionId(), "Right Nudge"s);
+   addTouchRegion(RECT { 0, 50, 30, 80 }, GetLeftFlipperActionId(), "Left Flipper"s);
+   addTouchRegion(RECT { 0, 50, 30, 80 }, GetStagedLeftFlipperActionId(), ""s);
+   addTouchRegion(RECT { 30, 50, 70, 80 }, GetCenterNudgeActionId(), "Center Nudge"s);
+   addTouchRegion(RECT { 70, 50, 100, 80 }, GetRightFlipperActionId(), "Right Flipper"s);
+   addTouchRegion(RECT { 70, 50, 100, 80 }, GetStagedRightFlipperActionId(), ""s);
+   addTouchRegion(RECT { 0, 80, 30, 90 }, GetLeftMagnaActionId(), "Left Magna"s);
+   addTouchRegion(RECT { 30, 80, 70, 100 }, GetLockbarActionId(), "Lockbar"s);
+   addTouchRegion(RECT { 70, 80, 100, 90 }, GetRightMagnaActionId(), "Right Magna"s);
+   addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId(), "Start"s);
+   addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId(), "Plunger"s);
 
    m_rumbleMode = m_appSettings.GetPlayer_RumbleMode();
    m_rumbleFlipperContact = m_appSettings.GetPlayer_RumbleFlipperContact();
@@ -396,7 +426,48 @@ string InputManager::GetDeviceElementName(uint16_t deviceId, uint16_t buttonOrAx
    const DeviceDef& device = m_inputDevices[deviceId];
    if (auto it = device.m_buttonOrAxisNames.find(buttonOrAxisId); it != device.m_buttonOrAxisNames.end())
       return it->second.name;
+   switch (device.m_type)
+   {
+   case DeviceType::Keyboard:
+   {
+      // SDL_GetScancodeName does not apply the active keyboard layout, therefore not corresponding to what the user expects
+      const char* const keyName = SDL_GetKeyName(SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(buttonOrAxisId), SDL_KMOD_NONE, false));
+      if (keyName != nullptr && keyName[0] != '\0')
+         return keyName;
+      break;
+   }
+   case DeviceType::Mouse:
+      switch (buttonOrAxisId)
+      {
+      case SDL_BUTTON_LEFT: return "Left Button"s;
+      case SDL_BUTTON_MIDDLE: return "Middle Button"s;
+      case SDL_BUTTON_RIGHT: return "Right Button"s;
+      case SDL_BUTTON_X1: return "X1 Button"s;
+      case SDL_BUTTON_X2: return "X2 Button"s;
+      default: break;
+      }
+      break;
+   default: break;
+   }
    return "Button #" + std::to_string(buttonOrAxisId);
+}
+
+vector<InputManager::DeviceElement> InputManager::GetDeviceElements(uint16_t deviceId) const
+{
+   assert(deviceId < m_inputDevices.size());
+   vector<DeviceElement> elements;
+   elements.reserve(m_inputDevices[deviceId].m_buttonOrAxisNames.size());
+   for (const auto& [buttonOrAxisId, def] : m_inputDevices[deviceId].m_buttonOrAxisNames)
+      elements.push_back({ buttonOrAxisId, def.isAxis, def.name });
+   std::ranges::sort(elements, [](const DeviceElement& a, const DeviceElement& b) { return a.id < b.id; });
+   return elements;
+}
+
+std::optional<float> InputManager::GetAxisPosition(uint16_t deviceId, uint16_t axisId) const
+{
+   if (const auto it = m_axisPositions.find(static_cast<uint32_t>(deviceId) << 16 | axisId); it != m_axisPositions.end())
+      return it->second;
+   return std::nullopt;
 }
 
 InputManager::DeviceType InputManager::GetDeviceType(uint16_t deviceId) const
@@ -445,6 +516,10 @@ void InputManager::ProcessInput()
 #ifdef ENABLE_XR
    if (IsUIPointerScrollingActive())
    {
+      // ProcessInput runs at the logic loop rate (many times per rendered frame with the multithreaded loop): scroll by elapsed time
+      const uint64_t nowUs = SDL_GetTicksNS() / 1000;
+      const float elapsedS = m_lastUIScrollUs == 0 ? 0.f : std::min(0.1f, static_cast<float>(nowUs - m_lastUIScrollUs) * 1e-6f);
+      m_lastUIScrollUs = nowUs;
       float wheelX = 0.f, wheelY = 0.f;
       for (const auto& [axisId, position] : m_axisPositions)
       {
@@ -454,10 +529,12 @@ void InputManager::ProcessInput()
          wheelY += UINavWheelForAxis(axisId, position, false, navBound);
          wheelX += UINavWheelForAxis(axisId, position, true, navBound);
       }
-      constexpr float scrollSpeed = 0.05f; // mouse wheel units per frame at full deflection
+      constexpr float scrollSpeed = 4.f; // mouse wheel units per second at full deflection
       if (wheelX != 0.f || wheelY != 0.f)
-         ImGui::GetIO().AddMouseWheelEvent(wheelX * scrollSpeed, wheelY * scrollSpeed);
+         ImGui::GetIO().AddMouseWheelEvent(wheelX * scrollSpeed * elapsedS, wheelY * scrollSpeed * elapsedS);
    }
+   else
+      m_lastUIScrollUs = 0;
 #endif
 
    UpdateRumble();
@@ -466,7 +543,7 @@ void InputManager::ProcessInput()
    if (m_player->m_ptable->m_tblAutoStartEnabled)
       Autostart(m_player->m_ptable->m_tblAutoStart, m_player->m_ptable->m_tblAutoStartRetry);
    if (m_autoStartTimestamp == 0) // Check if we've been initialized.
-      m_autoStartTimestamp = msec();
+      m_autoStartTimestamp = SDL_GetTicks();
 
    // Update continuous actions
    for (const auto action : m_onUpdateActions)
@@ -475,7 +552,7 @@ void InputManager::ProcessInput()
    // Process axis capture: if we have rested long enough, register the button release and stop capture
    if (m_buttonCaptureState == 1)
    {
-      const uint32_t ms = msec();
+      const uint64_t ms = SDL_GetTicks();
       for (ButtonMapping& bm : m_buttonCapture)
       {
          if (bm.m_buttonCapturePos != 0 && ms > bm.m_buttonCaptureStartMs + 200)
@@ -585,6 +662,11 @@ void InputManager::PushButtonEvent(uint16_t deviceId, uint16_t buttonId, uint64_
    if (isPressed && (deviceId == m_keyboardDeviceId || deviceId == m_mouseDeviceId) && m_player->m_liveUI->IsEditorUIOpened() && m_player->m_ptable->m_liveBaseTable == nullptr)
       return;
 
+   // A controller pointing at the VR UI surface uses its trigger/select inputs as laser clicks:
+   // they must not simultaneously trigger cabinet flipper adjustment.
+   if (IsUIPointerOwnedInput(deviceId, buttonId, false))
+      isPressed = false;
+
    uint32_t id = deviceId << 16 | buttonId;
    if (auto it = m_buttonMappings.find(id); it != m_buttonMappings.end())
    {
@@ -641,6 +723,27 @@ bool InputManager::IsUIPointerScrollingActive() const
 #endif
 }
 
+// Whether a low-level input belongs to the hand currently owning the VR laser
+// pointer. Trigger/select controls of that hand are pointer clicks while the
+// aim is on the UI surface, so they are removed from cabinet/UI action routing.
+bool InputManager::IsUIPointerOwnedInput(const uint16_t deviceId, const uint16_t buttonOrAxisId, const bool isAxis) const
+{
+#ifdef ENABLE_XR
+   if (m_player == nullptr || m_player->m_liveUI == nullptr || !m_player->m_liveUI->IsInGameUIOpened() || m_player->m_vrDevice == nullptr || deviceId >= m_inputDevices.size()
+      || m_inputDevices[deviceId].m_type != DeviceType::VRController)
+      return false;
+   const VRDevice::UIPointer pointer = m_player->m_vrDevice->GetUIPointer();
+   if (!pointer.valid || !pointer.onQuad || pointer.hand < 0 || pointer.hand > 1)
+      return false;
+   if (isAxis)
+      return buttonOrAxisId == (pointer.hand == 0 ? 17 : 16); // Analog trigger of the pointing hand
+   return buttonOrAxisId == (pointer.hand == 0 ? 1 : 0) // select/click
+      || buttonOrAxisId == (pointer.hand == 0 ? 7 : 6); // trigger/click
+#else
+   return false;
+#endif
+}
+
 // Signed wheel delta contributed by an axis position toward the given direction
 // (positive = up for vertical, right for horizontal), honoring the binding's
 // polarity. navBound reports whether the axis feeds the corresponding actions.
@@ -674,6 +777,10 @@ void InputManager::PushAxisEvent(uint16_t deviceId, uint16_t axisId, uint64_t ti
    // (during initial table load, the loading UI is displayed and interactive, so events must flow)
    if (m_player->m_overall_frames < 5 && !m_player->m_isLoading && !m_acceptStartupEvents)
       return;
+
+   // Trigger input of the hand owning the VR laser pointer is neutralized while it points at the UI.
+   if (IsUIPointerOwnedInput(deviceId, axisId, true))
+      position = 0.f;
 
    const uint32_t id = deviceId << 16 | axisId;
    m_axisPositions[id] = position;
@@ -720,7 +827,7 @@ void InputManager::PushAxisEvent(uint16_t deviceId, uint16_t axisId, uint64_t ti
       if (!wasCaptured && (posId == 1 || posId == 3)) // We have a pressed position (either -1 or 1), but we need to keep it long enough to validate it
       {
          m_buttonCapture.emplace_back(nullptr, nullptr, deviceId, axisId);
-         m_buttonCapture.back().m_buttonCaptureStartMs = msec();
+         m_buttonCapture.back().m_buttonCaptureStartMs = SDL_GetTicks();
          m_buttonCapture.back().m_buttonCapturePos = -posId;
       }
       else if (wasCaptured)
@@ -737,7 +844,7 @@ void InputManager::PushAxisEvent(uint16_t deviceId, uint16_t axisId, uint64_t ti
          else if ((posId == 1 && !it->IsAxisReversed()) || (posId == 2) || (posId == 3 && it->IsAxisReversed()))
          {
             // We have reached a sensible rest position (either -1, 0 or 1), but we need to keep it long enough to validate it
-            it->m_buttonCaptureStartMs = msec();
+            it->m_buttonCaptureStartMs = SDL_GetTicks();
             it->m_buttonCapturePos = posId;
          }
          else
@@ -747,6 +854,16 @@ void InputManager::PushAxisEvent(uint16_t deviceId, uint16_t axisId, uint64_t ti
          }
       }
    }
+}
+
+// Fallback for touch screens not detected at startup
+void InputManager::OnTouchScreenUsed()
+{
+   if (m_supportsTouch)
+      return;
+   PLOGI << "Touch screen used - Enabling touch support";
+   m_supportsTouch = true;
+   m_player->ShowTouchControlsHint();
 }
 
 void InputManager::PushTouchEvent(float relativeX, float relativeY, uint64_t timestampNs, bool isPressed)
@@ -759,15 +876,33 @@ void InputManager::PushTouchEvent(float relativeX, float relativeY, uint64_t tim
    if (m_player->IsVR())
       return;
 
-   POINT point;
-   point.x = (int)((float)m_player->m_playfieldWnd->GetWidth() * relativeX);
-   point.y = (int)((float)m_player->m_playfieldWnd->GetHeight() * relativeY);
+   // The frontend is not a playfield: the gameplay touch regions (menu strip, nudges, flippers,...)
+   // would fire their actions on top of its own UI
+   if (m_player->m_playMode == Player::PlayMode::Frontend)
+      return;
+
+   // While a menu is open, touches go to the UI (the overlay hides the regions): only releases apply
+   if (isPressed && m_player->m_liveUI && m_player->m_liveUI->IsOpened())
+      return;
+
+   // Regions are in the UI (playfield view) orientation: rotate the window-relative position like the UI mouse position
+   // (see LiveUI::AddMousePosEvent), so touches match the overlay for any view rotation, including the implicit window mode one
+   float u, v;
+   switch (m_player->m_liveUI ? m_player->m_liveUI->GetUIOrientation() : 0)
+   {
+   case 1: u = relativeY; v = 1.f - relativeX; break;
+   case 2: u = 1.f - relativeX; v = 1.f - relativeY; break;
+   case 3: u = 1.f - relativeY; v = relativeX; break;
+   default: u = relativeX; v = relativeY; break;
+   }
+   u *= 100.f;
+   v *= 100.f;
    for (const auto& region : m_touchRegionMap)
    {
       if (const bool wasPressed = m_inputActions[region.actionId]->GetDirectState(region.directStateSlot); wasPressed == isPressed)
          continue;
-      if (!Intersect(region.region, m_player->m_playfieldWnd->GetWidth(), m_player->m_playfieldWnd->GetHeight(), point,
-             fmodf(m_player->m_ptable->GetViewSetup().mViewportRotation, 360.0f) != 0.f))
+      const RECT& rc = region.region;
+      if (u < (float)rc.left || u > (float)rc.right || v < (float)rc.top || v > (float)rc.bottom)
          continue;
       m_inputActions[region.actionId]->SetDirectState(region.directStateSlot, isPressed);
    }
@@ -790,31 +925,31 @@ void InputManager::CreateInputActions()
          {
             if (m_player->m_liveUI->IsInGameUIOpened())
             {
+               if (m_buttonCaptureState != 0)
+                  return;
                if (isPressed)
                {
-                  if (action.GetActionId() == m_uiUpActionId)
+                  const unsigned int actionId = action.GetActionId();
+                  if (actionId == m_uiUpActionId || actionId == m_leftMagnaActionId)
                      m_player->m_liveUI->m_inGameUI.OnUIUpAction();
-                  else if (action.GetActionId() == m_uiDownActionId)
+                  else if (actionId == m_uiDownActionId || actionId == m_rightMagnaActionId)
                      m_player->m_liveUI->m_inGameUI.OnUIDownAction();
-                  else if (action.GetActionId() == m_uiLeftActionId)
+                  else if (actionId == m_uiLeftActionId)
                      m_player->m_liveUI->m_inGameUI.OnUILeftAction();
-                  else if (action.GetActionId() == m_uiRightActionId)
+                  else if (actionId == m_uiRightActionId)
                      m_player->m_liveUI->m_inGameUI.OnUIRightAction();
-                  // Somewhat hacky direct UI action mapping (inherited from legacy POV adjustment mode, could benefit from some additional cleanups)
-                  else if (action.GetActionId() == m_launchBallActionId)
+                  else if (actionId == m_launchBallActionId)
                      m_player->m_liveUI->m_inGameUI.OnUIResetToDefaults();
-                  else if (std::ranges::find(m_addCreditActionId, action.GetActionId()) != std::end(m_addCreditActionId)) // Any credit slot undoes
+                  else if (std::ranges::find(m_addCreditActionId, actionId) != std::end(m_addCreditActionId))
                      m_player->m_liveUI->m_inGameUI.OnUICancelChanges();
-                  else if (action.GetActionId() == m_startActionId)
+                  else if (actionId == m_startActionId)
                      m_player->m_liveUI->m_inGameUI.OnUISaveChanges();
                }
+               return;
             }
-            else
-            {
-               CComVariant rgvar[1] = { CComVariant(0x10000 | static_cast<int>(action.GetActionId())) };
-               DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
-               m_player->m_ptable->FireDispID(isPressed ? DISPID_GameEvents_KeyDown : DISPID_GameEvents_KeyUp, &dispparams);
-            }
+            CComVariant rgvar[1] = { CComVariant(0x10000 | static_cast<int>(action.GetActionId())) };
+            DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
+            m_player->m_ptable->FireDispID(isPressed ? DISPID_GameEvents_KeyDown : DISPID_GameEvents_KeyUp, &dispparams);
          }));
       return newAction->GetActionId();
    };
@@ -825,7 +960,18 @@ void InputManager::CreateInputActions()
          [this](const InputAction& action, bool prev, bool isPressed)
          {
             if (m_player->m_liveUI->IsInGameUIOpened())
+            {
+               if (m_buttonCaptureState != 0)
+                  return;
+               if (isPressed)
+               {
+                  if (action.GetActionId() == m_leftFlipperActionId)
+                     m_player->m_liveUI->m_inGameUI.OnUILeftAction();
+                  else if (action.GetActionId() == m_rightFlipperActionId)
+                     m_player->m_liveUI->m_inGameUI.OnUIRightAction();
+               }
                return;
+            }
             if (isPressed && m_player->IsPlaying() && m_player->ShouldHideDesktopCursor())
                SDL_HideCursor();
          
@@ -878,10 +1024,10 @@ void InputManager::CreateInputActions()
    m_stagedRightFlipperActionId = addFlipperKeyAction("RightStagedFlipper"s, "Right Staged Flipper"s, SDL_SCANCODE_RSHIFT); // SDL_SCANCODE_RALT
    m_leftMagnaActionId = addKeyAction("LeftMagna"s, "Left Magna"s, SDL_SCANCODE_LCTRL);
    m_rightMagnaActionId = addKeyAction("RightMagna"s, "Right Magna"s, SDL_SCANCODE_RCTRL);
-   m_uiUpActionId = addKeyAction("UIUp"s, "UI: Next Item"s, SDL_SCANCODE_LCTRL);
-   m_uiDownActionId = addKeyAction("UIDown"s, "UI: Previous Item"s, SDL_SCANCODE_RCTRL);
-   m_uiLeftActionId = addKeyAction("UILeft"s, "UI: Decrease/Cancel"s, SDL_SCANCODE_LSHIFT);
-   m_uiRightActionId = addKeyAction("UIRight"s, "UI: Increase/Confirm"s, SDL_SCANCODE_RSHIFT);
+   m_uiUpActionId = addKeyAction("UIPrev"s, "UI: Navigate Previous"s, SDL_SCANCODE_UNKNOWN); // Additional UI input (cabinet input through flipper/magna/... is always mapped)
+   m_uiDownActionId = addKeyAction("UINext"s, "UI: Navigate Next"s, SDL_SCANCODE_UNKNOWN);
+   m_uiLeftActionId = addKeyAction("UIDecrease"s, "UI: Adjust Decrease"s, SDL_SCANCODE_UNKNOWN);
+   m_uiRightActionId = addKeyAction("UIIncrease"s, "UI: Adjust Increase"s, SDL_SCANCODE_UNKNOWN);
    m_launchBallActionId = addKeyAction("LaunchBall"s, "Launch Ball"s, SDL_SCANCODE_RETURN);
    m_leftNudgeActionId = addNudgeKeyAction("LeftNudge"s, "Left Nudge"s, SDL_SCANCODE_Z);
    m_rightNudgeActionId = addNudgeKeyAction("RightNudge"s, "Right Nudge"s, SDL_SCANCODE_SLASH);
@@ -904,7 +1050,12 @@ void InputManager::CreateInputActions()
          }))->GetActionId();
 
    m_perfOverlayActionId = AddAction(
+#ifdef __APPLE__
+      // macOS reserves F11 ('Show Desktop')
+      std::make_unique<InputAction>(this, "PerfOverlay"s, "Toggle Perf. Overlay"s, keyMapping(SDL_SCANCODE_F1),
+#else
       std::make_unique<InputAction>(this, "PerfOverlay"s, "Toggle Perf. Overlay"s, keyMapping(SDL_SCANCODE_F11),
+#endif
          [this](const InputAction&, bool, bool isPressed)
          {
             if (isPressed)
@@ -915,7 +1066,20 @@ void InputManager::CreateInputActions()
       std::make_unique<InputAction>(this, "ExitGame"s, "Exit Game"s, keyMapping(SDL_SCANCODE_ESCAPE),
          [this](const InputAction& action, bool, bool isPressed)
          {
-            if (isPressed && !m_player->m_liveUI->IsOpened())
+            if (isPressed && m_buttonCaptureState != 0)
+               return;
+            if (isPressed && m_player->m_liveUI->IsInGameUIOpened())
+            {
+               m_player->m_liveUI->m_inGameUI.OnUINavigateBack();
+            }
+            else if (isPressed && m_player->m_playMode == Player::PlayMode::Frontend)
+            {
+               // The frontend gets its back requests first (to close its modals); when it does
+               // not consume them the exit button quits the application like the chrome's QUIT tab
+               if (!m_player->m_liveUI->m_frontendUI.OnNavigateBack())
+                  m_player->SetCloseState(Player::CS_CLOSE_APP);
+            }
+            else if (isPressed && !m_player->m_liveUI->IsOpened())
             {
                CComVariant rgvar[1] = { CComVariant(0x10000 | static_cast<int>(action.GetActionId())) };
                DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
@@ -923,16 +1087,14 @@ void InputManager::CreateInputActions()
                // A play test stacked over an editor session gets back to the editor, like the Win32 editor does
                m_player->SetCloseState(m_player->HasStackedTableSession() ? Player::CS_STOP_PLAY : g_isMobile ? Player::CS_CLOSE_CAPTURE_SCREENSHOT : g_isStandalone ? Player::CS_CLOSE_APP : Player::CS_STOP_PLAY);
             }
-            else if (isPressed && m_player->m_liveUI->IsInGameUIOpened())
-            {
-               m_player->m_liveUI->m_inGameUI.OnUINavigateBack();
-            }
          }))->GetActionId();
 
    m_openInGameUIActionId = AddAction(
       std::make_unique<InputAction>(this, "InGameUI"s, "Toggle InGame UI"s, keyMapping(SDL_SCANCODE_F12),
          [this](const InputAction&, bool, bool isPressed)
          {
+            if (isPressed && m_buttonCaptureState != 0)
+               return;
             if (isPressed && !m_player->m_liveUI->IsOpened())
             {
                m_player->m_liveUI->OpenInGameUI();
@@ -1077,6 +1239,15 @@ void InputManager::CreateInputActions()
       {
          if (m_player->m_liveUI->IsEditorUIOpened() || !isPressed)
             return;
+         if (m_player->m_playMode == Player::PlayMode::Frontend)
+         {
+            // A frontend session has no stereo display to toggle: the action switches the
+            // session between VR and the desktop instead (when a VR session can run)
+            VPX::Frontend::FrontendUI& frontend = m_player->m_liveUI->m_frontendUI;
+            if (frontend.IsVRAvailable())
+               frontend.RestartFrontendSession(m_player->IsVR() ? Player::VROverride::ForceOff : Player::VROverride::ForceOn);
+            return;
+         }
          if (Is3DTVStereoMode(m_player->m_renderer->m_stereo3D) || IsAnaglyphStereoMode(m_player->m_renderer->m_stereo3D))
          { // Toggle stereo on/off
             m_player->m_renderer->m_stereo3Denabled = !m_player->m_renderer->m_stereo3Denabled;
@@ -1163,10 +1334,6 @@ InputAction* InputManager::AddAction(std::unique_ptr<InputAction>&& action)
    return m_inputActions.back().get();
 }
 
-bool InputManager::IsUINavigationActionId(unsigned int id) const
-{
-   return id == m_openInGameUIActionId || id == m_uiUpActionId || id == m_uiDownActionId || id == m_uiLeftActionId || id == m_uiRightActionId;
-}
 
 bool InputManager::IsPressed(int actionId) const
 {
@@ -1297,6 +1464,12 @@ void InputManager::StartButtonCapture()
    m_buttonCapture.clear();
 }
 
+void InputManager::EndButtonCapture()
+{
+   m_buttonCaptureState = 0;
+   m_buttonCapture.clear();
+}
+
 #pragma endregion
 
 
@@ -1318,17 +1491,17 @@ void InputManager::PlayRumble(const float lowFrequencySpeed, const float highFre
       high = 0.f;
    if (low <= 0.f && high <= 0.f)
       return;
-   const uint32_t now = msec();
+   const uint64_t now = SDL_GetTicks();
 
    std::lock_guard<std::mutex> lock(m_rumbleMutex);
    // Take a free slot. With all slots busy, a pulse that would not change the mix - no stronger on either motor
    // and not outlasting it - is not needed; anything else replaces the weakest.
-   const uint32_t endMs = now + static_cast<uint32_t>(max(ms_duration, 1));
+   const uint64_t endMs = now + static_cast<uint64_t>(max(ms_duration, 1));
    int slot = -1;
    float weakest = 2.f;
    float mixLow = 0.f;
    float mixHigh = 0.f;
-   uint32_t mixEndMs = 0;
+   uint64_t mixEndMs = 0;
    for (int i = 0; i < RUMBLE_PULSE_SLOTS; i++)
    {
       const RumblePulse& p = m_rumblePulses[i];
@@ -1376,20 +1549,20 @@ void InputManager::UpdateRumble()
       {
          for (RumblePulse& p : m_rumblePulses)
             p.endMs = 0;
-         UpdateRumbleOutput(msec());
+         UpdateRumbleOutput(SDL_GetTicks());
       }
       return;
    }
-   UpdateRumbleOutput(msec());
+   UpdateRumbleOutput(SDL_GetTicks());
 }
 
-void InputManager::UpdateRumbleOutput(const uint32_t now)
+void InputManager::UpdateRumbleOutput(const uint64_t now)
 {
    // Strongest active pulse per motor; the output lasts until the last active pulse ends and is re-evaluated
    // every frame, so it steps down to the next pulse once the strongest has run out.
    float low = 0.f;
    float high = 0.f;
-   uint32_t endMs = 0;
+   uint64_t endMs = 0;
    for (const RumblePulse& p : m_rumblePulses)
    {
       if (p.endMs <= now)
@@ -1548,14 +1721,14 @@ void InputManager::Autostart(const uint32_t initialDelayMs, const uint32_t retry
       return;
    }
 
-   const uint32_t now = msec();
+   const uint64_t now = SDL_GetTicks();
    if (m_autoStartTimestamp == 0)
    {
       m_autoStartTimestamp = now;
       return;
    }
 
-   const uint32_t elapsed = now - m_autoStartTimestamp;
+   const uint64_t elapsed = now - m_autoStartTimestamp;
    if (m_autoStartPressed // Start button is down.
       && (elapsed > 100)) // Start button has been down for at least 0.10 seconds.
    {
@@ -1671,7 +1844,7 @@ void InputManager::OnFlipperKeyPressed(const bool left)
 {
    if (!m_player->IsPlaying() || m_player->m_physics == nullptr)
       return;
-   const uint64_t now = usec();
+   const uint64_t now = SDL_GetTicksNS() / 1000;
    // Age of the input event (SDL event timestamps share the SDL_GetTicksNS time base)
    const uint64_t nowNs = SDL_GetTicksNS();
    const uint64_t ageUs = (m_lastButtonEventNs != 0 && m_lastButtonEventNs <= nowNs) ? min((nowNs - m_lastButtonEventNs) / 1000, (uint64_t)1000000) : 0;
@@ -1688,7 +1861,7 @@ void InputManager::OnFlipperRotateToEnd(const string& flipperName)
 {
    if (!m_flipPress.valid || m_player->m_physics == nullptr)
       return;
-   const uint64_t now = usec();
+   const uint64_t now = SDL_GetTicksNS() / 1000;
    if (now > m_flipPress.eventUs + 500000)
    {
       m_flipPress.valid = false; // Too old: not the press that turned this flipper on (e.g. a flip by the ROM alone)

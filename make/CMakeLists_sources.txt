@@ -65,6 +65,8 @@ set(VPX_SOURCES
    src/core/SettingsService.h
    src/core/TableAudit.cpp
    src/core/TableAudit.h
+   src/core/TableCatalog.cpp
+   src/core/TableCatalog.h
    src/core/TableDB.cpp
    src/core/TableDB.h
    src/core/TournamentFile.cpp
@@ -424,6 +426,15 @@ set(VPX_SOURCES
    src/ui/live/editor/ViewportSidebar.h
    src/ui/live/editor/ViewportSidebar.cpp
    
+   src/ui/live/frontend/FrontendDesktopRenderer.cpp
+   src/ui/live/frontend/FrontendDesktopRenderer.h
+   src/ui/live/frontend/FrontendMedia.cpp
+   src/ui/live/frontend/FrontendMedia.h
+   src/ui/live/frontend/FrontendUI.cpp
+   src/ui/live/frontend/FrontendUI.h
+   src/ui/live/frontend/FrontendTheme.cpp
+   src/ui/live/frontend/FrontendTheme.h
+   
    src/ui/live/ingameui/InGameUI.cpp
    src/ui/live/ingameui/InGameUI.h
    src/ui/live/ingameui/AudioSettingsPage.h
@@ -432,10 +443,22 @@ set(VPX_SOURCES
    src/ui/live/ingameui/CabinetRender.cpp
    src/ui/live/ingameui/CabinetSettingsPage.h
    src/ui/live/ingameui/CabinetSettingsPage.cpp
+   src/ui/live/ingameui/DeviceLayouts.h
+   src/ui/live/ingameui/DeviceLayouts.cpp
    src/ui/live/ingameui/DisplayProfileSettingsPage.h
    src/ui/live/ingameui/DisplayProfileSettingsPage.cpp
    src/ui/live/ingameui/DisplaySettingsPage.h
    src/ui/live/ingameui/DisplaySettingsPage.cpp
+   src/ui/live/ingameui/FrontendHomePage.h
+   src/ui/live/ingameui/FrontendHomePage.cpp
+   src/ui/live/ingameui/FrontendMediaManagerPage.h
+   src/ui/live/ingameui/FrontendMediaManagerPage.cpp
+   src/ui/live/ingameui/FrontendSettingsPage.h
+   src/ui/live/ingameui/FrontendSettingsPage.cpp
+   src/ui/live/ingameui/FrontendTableInfoPage.h
+   src/ui/live/ingameui/FrontendTableInfoPage.cpp
+   src/ui/live/ingameui/FrontendTablePage.h
+   src/ui/live/ingameui/FrontendTablePage.cpp
    src/ui/live/ingameui/GraphicSettingsPage.h
    src/ui/live/ingameui/GraphicSettingsPage.cpp
    src/ui/live/ingameui/HomePage.h
@@ -478,6 +501,10 @@ set(VPX_SOURCES
    src/ui/live/ingameui/PointOfViewSettingsPage.cpp
    src/ui/live/ingameui/SensorSetupPage.h
    src/ui/live/ingameui/SensorSetupPage.cpp
+   src/ui/live/ingameui/StartupWizardModel.h
+   src/ui/live/ingameui/StartupWizardModel.cpp
+   src/ui/live/ingameui/StartupWizardPage.h
+   src/ui/live/ingameui/StartupWizardPage.cpp
    src/ui/live/ingameui/StereoSettingsPage.h
    src/ui/live/ingameui/StereoSettingsPage.cpp
    src/ui/live/ingameui/TableMiscPage.h
@@ -486,6 +513,8 @@ set(VPX_SOURCES
    src/ui/live/ingameui/TableOptionsPage.cpp
    src/ui/live/ingameui/TableRulesPage.h
    src/ui/live/ingameui/TableRulesPage.cpp
+   src/ui/live/ingameui/TouchDevicePage.h
+   src/ui/live/ingameui/TouchDevicePage.cpp
    src/ui/live/ingameui/VRSettingsPage.h
    src/ui/live/ingameui/VRSettingsPage.cpp
    src/ui/live/ingameui/SystemInfoPage.h

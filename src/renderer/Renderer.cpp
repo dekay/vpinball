@@ -40,8 +40,6 @@ using namespace Concurrency::diagnostic;
 extern marker_series series;
 #endif
 
-#define MAX_BALL_SHADOW 8
-
 ////////////////////////////////////////////////////////////////////////////////
 
 Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncMode, const StereoMode stereo3D)
@@ -219,11 +217,8 @@ Renderer::Renderer(PinTable* const table, VPX::Window* wnd, VideoSyncMode& syncM
    envTex.reset();
    PLOGI << "Environment map mipmaps and irradiance computed"; // For profiling
 
-   const bool lowDetailBall = (m_table->GetDetailLevel() < 10);
-   std::shared_ptr<IndexBuffer> ballIndexBuffer
-      = std::make_shared<IndexBuffer>(m_renderDevice, lowDetailBall ? basicBallLoNumFaces : basicBallMidNumFaces, lowDetailBall ? basicBallLoIndices : basicBallMidIndices);
-   std::shared_ptr<VertexBuffer> ballVertexBuffer
-      = std::make_shared<VertexBuffer>(m_renderDevice, lowDetailBall ? basicBallLoNumVertices : basicBallMidNumVertices, (const float*)(lowDetailBall ? basicBallLo : basicBallMid));
+   std::shared_ptr<IndexBuffer> ballIndexBuffer = std::make_shared<IndexBuffer>(m_renderDevice, basicBallLoNumFaces, basicBallLoIndices);
+   std::shared_ptr<VertexBuffer> ballVertexBuffer = std::make_shared<VertexBuffer>(m_renderDevice, basicBallLoNumVertices, (const float*)basicBallLo);
    m_ballMeshBuffer = std::make_shared<MeshBuffer>("Ball"s, ballVertexBuffer, ballIndexBuffer, true);
 #ifdef DEBUG_BALL_SPIN
    {
@@ -325,10 +320,7 @@ void Renderer::ApplyTableSettings()
    // Cache DMD renderer properties
    for (int profile = 0; profile < (int)std::size(m_dmdUseLegacyRenderer); profile++)
    {
-      m_dmdUseLegacyRenderer[profile] = m_table->GetSettings().GetDMD_ProfileLegacy(profile);
-#if !defined(ENABLE_BGFX)
-      m_dmdUseLegacyRenderer[profile] = false; // Only available for BGFX
-#endif
+      m_dmdUseLegacyRenderer[profile] = m_table->GetSettings().GetDMD_ProfileLegacy(profile); // Only used with BGFX, see IsLegacyDMDRenderer
       m_dmdDotColor[profile] = convertColor(m_table->GetSettings().GetDMD_ProfileDotTint(profile), m_table->GetSettings().GetDMD_ProfileDotBrightness(profile));
       m_dmdDotProperties[profile].x = m_table->GetSettings().GetDMD_ProfileDotSize(profile);
       m_dmdDotProperties[profile].y = m_table->GetSettings().GetDMD_ProfileDotSharpness(profile);
@@ -928,7 +920,7 @@ void Renderer::UpdateStereoShaderState()
    }
 }
 
-// Loads a segment SDF atlas together with its pre-integrated coverage atlas '<name>-cov.png' (generated offline
+// Loads a segment SDF atlas together with its pre-integrated coverage atlas '<name>-cov.webp' (generated offline
 // alongside the SDF atlases by tools/alphaseg/extract-segs.py and expected to be in sync with them: the left
 // half holds the sharp segment coverage, the right half the squared SDF for glass light dispersion). Box filtered
 // mipmaps of the coverage atlas directly provide the emitted light integrated over each texel footprint, making
@@ -941,7 +933,7 @@ void Renderer::GetSegSDF(SegDisplayAtlas& atlas, const char* const name) const
    atlas.sdf.reset(Texture::CreateFromFile(path, false));
    if (atlas.sdf == nullptr)
       return;
-   atlas.cov.reset(Texture::CreateFromFile(path.parent_path() / (path.stem().string() + "-cov.png"), false));
+   atlas.cov.reset(Texture::CreateFromFile(path.parent_path() / (path.stem().string() + "-cov.webp"), false));
    if (atlas.cov != nullptr)
    {
       const std::shared_ptr<const BaseTexture> covTex = atlas.cov->GetRawBitmap(false, 0);
@@ -1038,43 +1030,43 @@ void Renderer::SetupSegmentRenderer(int profile, const bool isBackdrop, const ve
    case CTLPI_SEG_LAYOUT_7:
       segIndex = 0;
       GetSegSDF(m_segDisplay[family][0],
-         (family == SegmentFamily::Gottlieb)   ? "7seg-gts.png"
-            : (family == SegmentFamily::Bally) ? "7seg-bally.png"
-            : (family == SegmentFamily::Atari) ? "7seg-atari.png"
-                                               : "7seg-williams.png");
+         (family == SegmentFamily::Gottlieb)   ? "7seg-gts.webp"
+            : (family == SegmentFamily::Bally) ? "7seg-bally.webp"
+            : (family == SegmentFamily::Atari) ? "7seg-atari.webp"
+                                               : "7seg-williams.webp");
       break;
    case CTLPI_SEG_LAYOUT_7C:
       segIndex = 1;
-      GetSegSDF(m_segDisplay[family][1], (family == SegmentFamily::Bally) ? "7seg-c-bally.png" : (family == SegmentFamily::Atari) ? "7seg-c-atari.png" : "7seg-c-williams.png");
+      GetSegSDF(m_segDisplay[family][1], (family == SegmentFamily::Bally) ? "7seg-c-bally.webp" : (family == SegmentFamily::Atari) ? "7seg-c-atari.webp" : "7seg-c-williams.webp");
       break;
    // TODO I did not found any reference for a dot only 7 segments display, so we use the comma one which is likely wrong
    case CTLPI_SEG_LAYOUT_7D:
       segIndex = 2;
-      GetSegSDF(m_segDisplay[family][2], "7seg-c-williams.png");
+      GetSegSDF(m_segDisplay[family][2], "7seg-c-williams.webp");
       break;
    case CTLPI_SEG_LAYOUT_9:
       segIndex = 3;
-      GetSegSDF(m_segDisplay[family][3], "9seg-gts.png");
+      GetSegSDF(m_segDisplay[family][3], "9seg-gts.webp");
       break;
    case CTLPI_SEG_LAYOUT_9C:
       segIndex = 4;
-      GetSegSDF(m_segDisplay[family][4], "9seg-c-gts.png");
+      GetSegSDF(m_segDisplay[family][4], "9seg-c-gts.webp");
       break;
    case CTLPI_SEG_LAYOUT_14:
       segIndex = 5;
-      GetSegSDF(m_segDisplay[family][5], "14seg-williams.png");
+      GetSegSDF(m_segDisplay[family][5], "14seg-williams.webp");
       break;
    case CTLPI_SEG_LAYOUT_14D:
       segIndex = 6;
-      GetSegSDF(m_segDisplay[family][6], "14seg-d-williams.png");
+      GetSegSDF(m_segDisplay[family][6], "14seg-d-williams.webp");
       break;
    case CTLPI_SEG_LAYOUT_14DC:
       segIndex = 7;
-      GetSegSDF(m_segDisplay[family][7], (family == SegmentFamily::Gottlieb) ? "14seg-dc-gts.png" : "14seg-dc-williams.png");
+      GetSegSDF(m_segDisplay[family][7], (family == SegmentFamily::Gottlieb) ? "14seg-dc-gts.webp" : "14seg-dc-williams.webp");
       break;
    case CTLPI_SEG_LAYOUT_16:
       segIndex = 8;
-      GetSegSDF(m_segDisplay[family][8], "16seg.png");
+      GetSegSDF(m_segDisplay[family][8], "16seg.webp");
       break;
    }
    const SegDisplayAtlas& segAtlas = m_segDisplay[family][segIndex];
@@ -1420,23 +1412,31 @@ void Renderer::RenderUIScene()
    // per view with the correct orientation (same render path as Render3DScene)
    const bool uiBeforeStero = m_stereo3Denabled && (m_renderDevice->m_stereoShader != nullptr) && (GetBackBufferTexture() != nullptr)
       && (m_stereo3D == STEREO_SBS || m_stereo3D == STEREO_TB || m_stereo3D == STEREO_INT || m_stereo3D == STEREO_FLIPPED_INT);
-   // For OpenXR, the LiveUI is rendered to a dedicated mono render target submitted as a view locked quad composition layer (see Render3DScene)
-   RenderTarget* xrUILayer = nullptr;
-#ifdef ENABLE_XR
-   if (m_stereo3Denabled && m_stereo3D == STEREO_VR)
-      xrUILayer = g_pplayer->m_vrDevice->GetUIRenderTarget();
-#endif
-   RenderTarget* const uiRT = xrUILayer != nullptr ? xrUILayer : uiBeforeStero ? GetBackBufferTexture() : backBuffer;
-   if (xrUILayer != nullptr)
-   {
-      // The projection layer below the UI quad has no scene content while loading, so clear it to black
-      m_renderDevice->SetRenderTarget("Loading"s, backBuffer, false, true);
-      m_renderDevice->Clear(clearType::TARGET, 0xFF000000);
-   }
+   RenderTarget* const uiRT = uiBeforeStero ? GetBackBufferTexture() : backBuffer;
    m_renderDevice->SetRenderTarget("Loading"s, uiRT, false, true);
-   m_renderDevice->Clear(clearType::TARGET, xrUILayer != nullptr ? 0x00000000 : 0xFF000000); // The XR UI quad layer is alpha blended over the projection layer
-   g_pplayer->m_liveUI->RenderUI();
-   if (uiRT != backBuffer && xrUILayer == nullptr)
+   m_renderDevice->Clear(clearType::TARGET, 0xFF000000);
+#ifdef ENABLE_XR
+   // For OpenXR, the UI draw list is rasterized to an offscreen surface, then drawn inside the
+   // stereo projection as a world-space quad (same path as RenderView::Render)
+   if (m_stereo3Denabled && m_stereo3D == STEREO_VR)
+   {
+      VRDevice* const vrDevice = g_pplayer->m_vrDevice;
+      Vertex3Ds quad[4] = {}; // Degenerate (invisible) quad while the UI is not shown
+      vrDevice->GetUIQuadScene(quad);
+      ModelViewProj quadMvp(m_renderDevice->m_nEyes);
+      const SceneLayout::SpaceTransform& space = g_pplayer->m_ptable->GetSceneLayout().GetSpaceTransform(VPX::SpaceReference::Playfield);
+      for (int eye = 0; eye < m_renderDevice->m_nEyes; eye++)
+      {
+         float projScale;
+         quadMvp.SetView(eye, SceneLayout::ComposeView(space, vrDevice->GetEyeView(eye), projScale));
+         quadMvp.SetProj(eye, Matrix3D::MatrixScale(projScale) * vrDevice->GetEyeProj(eye));
+      }
+      g_pplayer->m_liveUI->RenderUIVR(quad, quadMvp);
+   }
+   else
+#endif
+      g_pplayer->m_liveUI->RenderUI();
+   if (uiRT != backBuffer)
    {
       UpdateStereoShaderState();
       m_activeView->ApplyStereo(uiRT, backBuffer);
@@ -2165,7 +2165,7 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
       RenderTarget* const backBuffer = wnd != nullptr ? wnd->GetBackBuffer() : nullptr;
       const double refreshRate = wnd != nullptr ? wnd->GetRefreshRate() : 0.;
       const int64_t frameInterval = refreshRate > 0. ? static_cast<int64_t>(1000000. / refreshRate) : 0; // Unknown display rate: no throttling
-      const int64_t now = static_cast<int64_t>(usec());
+      const int64_t now = static_cast<int64_t>(SDL_GetTicksNS() / 1000);
       int64_t& nextRenderTime = m_ancillaryWndNextRenderTime[window];
       if (!isAdjusted && !wasAdjusted && backBuffer != nullptr && backBuffer == m_ancillaryWndLastRT[window] && now + frameInterval / 2 < nextRenderTime)
          return;
@@ -2261,9 +2261,9 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
             if (!wnd->IsVisible())
             {
                wnd->Show();
-               m_ancillaryWndShowTime[window] = msec();
+               m_ancillaryWndShowTime[window] = SDL_GetTicks();
             }
-            else if (wnd->IsMinimized() && (msec() - m_ancillaryWndShowTime[window]) < demotionRepairDelay)
+            else if (wnd->IsMinimized() && (SDL_GetTicks() - m_ancillaryWndShowTime[window]) < demotionRepairDelay)
                wnd->Show();
          }
 
@@ -2272,7 +2272,7 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
             assert(false); // This is disabled for the time being
             static std::array<string, 3> tonemapPassNames = { "Backglass Tonemap"s, "ScoreView Tonemap"s, "Topper Tonemap"s };
             const string& tonemapPassName = tonemapPassNames[window - VPXWindowId::VPXWINDOW_Backglass];
-            const float jitter = (float)((msec() & 2047) / 1000.0);
+            const float jitter = (float)((SDL_GetTicks() & 2047) / 1000.0);
             rd->ResetRenderState();
             rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
             rd->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);

@@ -159,7 +159,7 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
 
    curl -sL https://github.com/bkaradzic/bgfx.cmake/releases/download/v${BGFX_CMAKE_VERSION}/bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz -o bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
    tar xzf bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
-   curl -sL https://github.com/vbousquet/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
+   curl -sL https://github.com/vpinball/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
    tar xzf bgfx-${BGFX_PATCH_SHA}.tar.gz
    cd bgfx.cmake
    rm -rf bgfx
@@ -538,7 +538,11 @@ fi
 # build ffmpeg
 #
 
-FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}_002"
+# Decoding of local media files only: no network (protocols, TLS), encoders or muxers. Library autodetection is off, so
+# what happens to be installed on the build machine is never linked in (libcurl was, with FFmpeg 9.1)
+# Windows: native threads, and the MinGW runtime (libgcc, winpthread) and zlib linked statically, so the DLLs only
+# depend on system DLLs
+FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}_003"
 FFMPEG_FOUND_SHA="$([ -f ffmpeg/cache.txt ] && cat ffmpeg/cache.txt || echo "")"
 
 if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
@@ -556,10 +560,17 @@ if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
       --enable-shared \
       --disable-static \
       --disable-programs \
+      --disable-autodetect \
+      --enable-zlib \
+      --enable-w32threads \
+      --disable-network \
+      --disable-encoders \
+      --disable-muxers \
       --disable-doc \
       --disable-debug \
       --disable-avdevice \
       --disable-avfilter \
+      --extra-ldflags="-static" \
       --arch="x86_64" \
       --build-suffix=64
    make -j${NUM_PROCS}
@@ -619,9 +630,11 @@ if [ "${ZLIB_EXPECTED_SHA}" != "${ZLIB_FOUND_SHA}" ]; then
    tar xzf zlib-${ZLIB_SHA}.tar.gz
    mv zlib-${ZLIB_SHA} zlib
    cd zlib
+   sed -i.bak '/set(CMAKE_DEBUG_POSTFIX "d")/d' CMakeLists.txt
    cmake \
       -DBUILD_SHARED_LIBS=OFF \
-      -DZLIB_BUILD_EXAMPLES=OFF \
+      -DZLIB_BUILD_SHARED=OFF \
+      -DZLIB_BUILD_TESTING=OFF \
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
@@ -728,7 +741,7 @@ if [ "${LIBMYSOFA_EXPECTED_SHA}" != "${LIBMYSOFA_FOUND_SHA}" ]; then
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -DZLIB_INCLUDE_DIR="$PWD/../../zlib/zlib" \
-      -DZLIB_LIBRARY="$PWD/../../zlib/zlib/build/libzlibstatic.a" \
+      -DZLIB_LIBRARY="$PWD/../../zlib/zlib/build/libzs.a" \
       -B build
    cmake --build build -- -j${NUM_PROCS}
    cp build/src/mysofa_export.h src/hrtf
@@ -890,7 +903,7 @@ cp libbacktrace/libbacktrace/.libs/libbacktrace.a ../../../third-party/build-lib
 cp libbacktrace/libbacktrace/backtrace.h ../../../third-party/include
 cp libbacktrace/libbacktrace/backtrace-supported.h ../../../third-party/include
 
-cp zlib/zlib/build/libzlibstatic.a ../../../third-party/build-libs/windows-mingw-x64/libz.a
+cp zlib/zlib/build/libzs.a ../../../third-party/build-libs/windows-mingw-x64/libz.a
 
 cp libmysofa/libmysofa/build/src/libmysofa.a ../../../third-party/build-libs/windows-mingw-x64
 cp libmysofa/libmysofa/src/hrtf/mysofa.h ../../../third-party/include

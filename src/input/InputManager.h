@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 #include <bitset>
 #include <mutex>
+#include <optional>
 
 #include "input/InputAction.h"
 #include "input/PhysicsSensor.h"
@@ -29,7 +30,7 @@ public:
    ~InputManager() override;
 
    ///// Game Actions
-   const vector<std::unique_ptr<InputAction>>& GetInputActions() { return m_inputActions; }
+   const vector<std::unique_ptr<InputAction>>& GetInputActions() const { return m_inputActions; }
    unsigned int GetLeftFlipperActionId() const { return m_leftFlipperActionId; }
    unsigned int GetRightFlipperActionId() const { return m_rightFlipperActionId; }
    unsigned int GetStagedLeftFlipperActionId() const { return m_stagedLeftFlipperActionId; }
@@ -71,12 +72,11 @@ public:
    unsigned int GetRulesActionId() const { return m_rulesActionId; }
    unsigned int GetMouseLeftActionId() const { return m_mouseLeftActionId; }
    unsigned int GetMouseRightActionId() const { return m_mouseRightActionId; }
-   bool IsUINavigationActionId(unsigned int id) const override;
    bool IsPressed(int actionId) const;
    int GetWindowVirtualKeyForAction(unsigned int actionId) const;
 
-   void EnableRumbleFeedback(bool enable) { m_rumbleMode = enable; }
-   bool IsRumbleFeedbackEnabled() const { return m_rumbleMode; }
+   void SetRumbleMode(int mode) { m_rumbleMode = mode; } // See m_rumbleMode
+   int GetRumbleMode() const { return m_rumbleMode; }
 
    ///// Input devices
    enum class DeviceType
@@ -109,6 +109,14 @@ public:
    bool IsDeviceConnected(uint16_t deviceId) const;
    bool IsDeviceMapped(uint16_t deviceId) const;
    string GetDeviceElementName(uint16_t deviceId, uint16_t buttonOrAxisId) const;
+   struct DeviceElement
+   {
+      uint16_t id;
+      bool isAxis;
+      string name;
+   };
+   vector<DeviceElement> GetDeviceElements(uint16_t deviceId) const;
+   std::optional<float> GetAxisPosition(uint16_t deviceId, uint16_t axisId) const; // Last reported position, if any
    DeviceType GetDeviceType(uint16_t deviceId) const;
    uint16_t GetKeyboardDeviceId() const { return m_keyboardDeviceId; }
    uint16_t GetMouseDeviceId() const { return m_mouseDeviceId; }
@@ -137,16 +145,21 @@ public:
 
    struct TouchRegionDef
    {
-      RECT region;
+      RECT region; // In percent of the playfield view, oriented as the UI (see LiveUI::GetUIOrientation)
       unsigned int actionId;
       int directStateSlot;
+      string label; // Overlay label, empty for a region sharing the area of a labeled one
    };
    bool HasTouchInput() const { return m_supportsTouch; }
+   void OnTouchScreenUsed();
    const vector<TouchRegionDef>& GetTouchState() const { return m_touchRegionMap; }
+   bool IsTouchRegionPressed(const TouchRegionDef& region) const { return m_inputActions[region.actionId]->GetDirectState(region.directStateSlot); }
 
    void StartButtonCapture();
+   void EndButtonCapture();
    const vector<ButtonMapping>& GetButtonCapture() const { return m_buttonCapture; }
    string GetMappingLabel(const vector<ButtonMapping>& mappings) const override;
+   bool IsButtonCaptureActive() const { return m_buttonCaptureState != 0; }
    bool IsButtonCaptureDone() const { return m_buttonCaptureState == 2; }
 
    // ButtonInputEventManager
@@ -227,7 +240,7 @@ private:
    {
       bool valid = false;
       bool left = false;
-      uint64_t eventUs = 0;       // When the input device reported the press (usec() time base)
+      uint64_t eventUs = 0;       // When the input device reported the press (us, SDL_GetTicksNS time base)
       uint64_t processedUs = 0;   // When VPX processed it (fired the KeyDown)
       int64_t gameUs = 0;         // Game time matching eventUs
       unsigned int pollGapUs = 0; // Gap between the input processing that saw the press and the previous one
@@ -284,6 +297,7 @@ private:
    unsigned int m_mouseRightActionId;
    ankerl::unordered_dense::map<uint32_t, vector<ButtonMapping*>> m_buttonMappings;
    vector<InputAction*> m_onUpdateActions;
+   bool IsUIPointerOwnedInput(uint16_t deviceId, uint16_t buttonOrAxisId, bool isAxis) const;
    const unsigned int m_onActionEventMsgId;
 
    ankerl::unordered_dense::map<uint32_t, vector<SensorMapping*>> m_sensorMappings;
@@ -293,6 +307,7 @@ private:
    // controller points at its surface, axes bound to UI navigation actions are
    // repurposed as mouse-wheel scroll of the pointed pane (see ProcessInput)
    ankerl::unordered_dense::map<uint32_t, float> m_axisPositions;
+   uint64_t m_lastUIScrollUs = 0; // Last VR pointer stick scroll, for a frame rate independent scroll speed
    float UINavWheelForAxis(uint32_t deviceAndAxisId, float position, bool horizontal, bool& navBound) const;
 
    class DeviceDef final
@@ -339,7 +354,7 @@ private:
    class SDLInputHandler* m_sdlHandler = nullptr;
 
    void Autostart(const uint32_t initialDelayMs, const uint32_t retryDelayMs);
-   uint32_t m_autoStartTimestamp = 0;
+   uint64_t m_autoStartTimestamp = 0;
    bool m_gameStartedOnce = false;
    bool m_acceptStartupEvents = false;
    bool m_autoStartPressed = false;
@@ -354,14 +369,14 @@ private:
    {
       float low = 0.f;
       float high = 0.f;
-      uint32_t endMs = 0;
+      uint64_t endMs = 0;
    };
    static constexpr int RUMBLE_PULSE_SLOTS = 8;
    RumblePulse m_rumblePulses[RUMBLE_PULSE_SLOTS];
    std::mutex m_rumbleMutex;
    float m_rumbleSentLow = 0.f; // What the device is currently playing
    float m_rumbleSentHigh = 0.f;
-   uint32_t m_rumbleSentEndMs = 0;
+   uint64_t m_rumbleSentEndMs = 0;
    bool m_rumbleSentKickLow = false;
    bool m_rumbleSentKickHigh = false;
    // A new pulse at RUMBLE_KICK_MIN_LEVEL or above is flagged as a kick for RUMBLE_KICK_MS (see PlayRumble).
@@ -371,9 +386,9 @@ private:
    static constexpr float RUMBLE_KICK_MIN_LEVEL = (0.6f - 0.3f) / 0.7f; // level from which a pulse gets the kick; pulses meant as a light touch stay below it
    float m_rumbleMixLow = 0.f; // The mix before the kick, to tell a new hit from a kick ending
    float m_rumbleMixHigh = 0.f;
-   uint32_t m_rumbleKickLowEndMs = 0;
-   uint32_t m_rumbleKickHighEndMs = 0;
-   void UpdateRumbleOutput(const uint32_t now); // m_rumbleMutex must be held
+   uint64_t m_rumbleKickLowEndMs = 0;
+   uint64_t m_rumbleKickHighEndMs = 0;
+   void UpdateRumbleOutput(const uint64_t now); // m_rumbleMutex must be held
    void SendRumble(const float low, const float high, const int ms_duration, const bool kickLow, const bool kickHigh);
    float m_rumbleFlipperContact = 1.f; // Strength of the rumble played on flipper/ball contact, 0 disables it
    float m_rumbleBumper = 1.f; // Strength of the bumper rumble, 0 disables it

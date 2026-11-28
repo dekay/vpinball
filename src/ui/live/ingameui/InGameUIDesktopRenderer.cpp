@@ -6,6 +6,7 @@
 #include "InGameUI.h"
 #include "InGameUIPage.h"
 #include "InGameUIWidgets.h"
+#include "StartupWizardPage.h"
 
 #include "core/player.h"
 #include "core/VPApp.h"
@@ -28,25 +29,6 @@ namespace
 {
    constexpr ImU32 kAccentColor = IM_COL32(232, 84, 134, 255); // Selected tab underline / sub-category side bar
    constexpr ImU32 kFocusColor = IM_COL32(110, 180, 255, 255); // Flipper-nav focus ring on the focused element
-
-   // Letter-spaced text (like the LOADING caption), measured then drawn char by char
-   float SpacedTextWidth(ImFont* const font, const float fontSize, const char* const text, const float tracking)
-   {
-      float width = -tracking;
-      for (const char* c = text; *c; c++)
-         width += font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, c, c + 1).x + tracking;
-      return width;
-   }
-
-   void DrawSpacedText(ImDrawList* const drawList, ImFont* const font, const float fontSize, const ImVec2& pos, const float tracking, const ImU32 col, const char* const text)
-   {
-      ImVec2 pen = pos;
-      for (const char* c = text; *c; c++)
-      {
-         drawList->AddText(font, fontSize, pen, col, c, c + 1);
-         pen.x += font->CalcTextSizeA(fontSize, FLT_MAX, 0.f, c, c + 1).x + tracking;
-      }
-   }
 
    const char* PathIcon(const string& path)
    {
@@ -74,8 +56,16 @@ namespace
          return ICON_LC_EYE;
       if (path == "settings/stereo")
          return ICON_LC_RECTANGLE_GOGGLES;
+      if (path == "settings/frontend")
+         return ICON_LC_GALLERY_HORIZONTAL_END;
       if (path == "settings/vr")
          return ICON_LC_ROTATE_3D;
+      if (path == "frontend/table")
+         return ICON_LC_PLAY;
+      if (path == "table/info")
+         return ICON_LC_INFO;
+      if (path == "table/media")
+         return ICON_LC_FILM;
       if (path == "table/rules")
          return ICON_LC_CROWN;
       if (path == "table/options")
@@ -94,9 +84,77 @@ InGameUIDesktopRenderer::InGameUIDesktopRenderer(InGameUI& owner)
 {
 }
 
+void InGameUIDesktopRenderer::OnUIOpened()
+{
+   // Each UI session starts its flipper navigation on the top-level header.
+   // Track the initial path so the render-time navigation-change handling does
+   // not immediately move this initial focus down to the page items.
+   const auto& history = m_inGameUI.GetNavigationHistory();
+   m_lastNavPath = history.empty() ? ""s : history.back();
+   m_navLevel = NavLevel::TopTabs;
+   m_navTabIndex = -1; // Syncs to the selected group at next render
+   m_navRailIndex = -1;
+   m_navWasActive = m_inGameUI.IsFlipperNav();
+}
+
+void InGameUIDesktopRenderer::BuildTopTabs(vector<DesktopTopTab>& tabs, const string& rootPath, const std::function<string(const string&)>& firstPathOf)
+{
+   tabs.push_back({ "GAME", "game", false, 1, 1.f, [this]() { m_player->m_liveUI->HideUI(); } });
+   tabs.push_back({ "TABLE", "table", false, 0, 1.f, [this, rootPath]()
+      {
+         m_selectedGroup = "table";
+         m_inGameUI.NavigateTo(rootPath);
+      } });
+   const string settingsPath = firstPathOf("settings");
+   if (!settingsPath.empty())
+      tabs.push_back({ "SETTINGS", "settings", false, 0, 1.f, [this, settingsPath]()
+         {
+            m_selectedGroup = "settings";
+            m_inGameUI.NavigateTo(settingsPath);
+         } });
+   const string pluginsPath = firstPathOf("plugins");
+   if (!pluginsPath.empty())
+      tabs.push_back({ "PLUGINS", "plugins", false, 0, 1.f, [this, pluginsPath]()
+         {
+            m_selectedGroup = "plugins";
+            m_inGameUI.NavigateTo(pluginsPath);
+         } });
+   const string aboutPath = firstPathOf("misc");
+   if (!aboutPath.empty())
+      tabs.push_back({ "ABOUT", "misc", true, 1, 0.85f, [this, aboutPath]()
+         {
+            m_selectedGroup = "misc";
+            m_inGameUI.NavigateTo(aboutPath);
+         } });
+   // Quit discards the UI and requests the session close, using the same close
+   // state selection as the Exit Game input action
+   tabs.push_back({ "QUIT", "quit", true, 1, 0.85f, [this]()
+      {
+         m_player->m_liveUI->HideUI();
+         m_player->SetCloseState(m_player->HasStackedTableSession() ? Player::CS_STOP_PLAY
+               : g_isMobile                                         ? Player::CS_CLOSE_CAPTURE_SCREENSHOT
+               : g_isStandalone                                     ? Player::CS_CLOSE_APP
+                                                                    : Player::CS_STOP_PLAY);
+      } });
+}
+
+string InGameUIDesktopRenderer::NavGroup(const string& path) const { return path.substr(0, path.find('/')); }
+
+string InGameUIDesktopRenderer::NavRootGroup(const string& rootPath) const { return "table"s; }
+
+const char* InGameUIDesktopRenderer::NavRootRailLabel(const string& group) const { return group == "table" ? "Table Info" : nullptr; }
+
+const char* InGameUIDesktopRenderer::NavRootPageTitle() const { return "Table Info"; }
+
 void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, float elapsedS)
 {
    if (pages.empty())
+      return;
+   // Pages are not faded in/out: the UI appears and vanishes instantly, so once
+   // the top page starts closing (the whole UI closing back to the game) there
+   // is nothing left to render — the page only finishes its close animation in
+   // the model before being discarded
+   if (!pages.back()->IsActive())
       return;
    const ImGuiIO& io = ImGui::GetIO();
    const ImGuiStyle& style = ImGui::GetStyle();
@@ -108,6 +166,13 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
    const bool portraitFrame = io.DisplaySize.x < io.DisplaySize.y;
    const bool cabinetInset = portraitFrame && m_player->m_ptable->GetViewMode() == ViewSetupID::BG_FULLSCREEN;
    ImVec2 uiPos(0.f, 0.f), uiSize(io.DisplaySize);
+   // Wide frames cap the chrome to a centered column with dimmed side bands
+   const float maxWidth = 1650.f * dpi;
+   if (uiSize.x > maxWidth)
+   {
+      uiPos.x = (uiSize.x - maxWidth) * 0.5f;
+      uiSize.x = maxWidth;
+   }
    if (cabinetInset)
    {
       uiSize.y = uiSize.x;
@@ -166,6 +231,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
    const string activePath = history.empty() ? ""s : history.back();
    const string rootPath = history.empty() ? ""s : history.front();
    InGameUIPage* const contentPage = pages.back();
+   StartupWizardPage* const wizardPage = dynamic_cast<StartupWizardPage*>(contentPage);
 
    // Flipper nav state: the focus level restarts on the page items when the
    // location changes or when navigation was disengaged (mouse took over)
@@ -178,21 +244,13 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       m_navLevel = NavLevel::PageItems;
    m_navWasActive = m_inGameUI.IsFlipperNav();
 
-   const auto groupOf = [](const string& path) { return path.substr(0, path.find('/')); };
+   const auto groupOf = [this](const string& path) { return NavGroup(path); };
 
-   // Selected category: follows the active page's path, or the selected homepage
-   // item under flipper navigation while on the root page. The root page itself
-   // belongs to the "Table" category as its "Table Info" sub-entry
-   string selectedNavPath = activePath;
-   if (contentPage == rootPage && rootPage != nullptr && m_inGameUI.IsFlipperNav())
-   {
-      const auto& rootItems = rootPage->GetItems();
-      const int sel = rootPage->GetSelectedItemIndex();
-      if (sel >= 0 && sel < (int)rootItems.size() && rootItems[sel]->m_type == InGameUIItem::Type::Navigation)
-         selectedNavPath = rootItems[sel]->m_path;
-   }
+   // Selected category: follows the active page's path. The root page itself
+   // belongs to the NavRootGroup category as its navigation root sub-entry
+   const string selectedNavPath = activePath;
    if (contentPage == rootPage)
-      m_selectedGroup = selectedNavPath == rootPath ? "table"s : groupOf(selectedNavPath);
+      m_selectedGroup = NavRootGroup(rootPath);
    else if (!activePath.starts_with("popup/"s))
       m_selectedGroup = groupOf(activePath);
    // Individual plugin pages ("plugin/<id>") and plugin sheets
@@ -229,81 +287,38 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
 
    // The rail relies on the cached navigation entries so it stays available while
    // the homepage is closed under a leaf page
-   const bool showNav = !m_navEntries.empty();
+   const bool showNav = wizardPage != nullptr || !m_navEntries.empty();
+   if (!showNav)
+   {
+      // No navigation chrome (UI opened on a page without table of contents: rules card, POV edit, popups): the page
+      // items are the only navigation level, nothing must remain from an earlier session
+      m_navTabs.clear();
+      m_navRailRows.clear();
+      m_navLevel = NavLevel::PageItems;
+   }
 
    // Tabs in left-to-right order (right-aligned ones are laid out from the right
    // edge, rightmost first); the same order drives flipper navigation. They are
    // built ahead of the layout since their width decides whether the bar needs
    // a second line. The activate lambdas are kept in m_navTabs for flipper
    // navigation: they capture the target paths by value since they outlive this frame
-   struct Tab
-   {
-      const char* label;
-      const char* group;
-      bool right; // Right-justified inside its line
-      float scale; // Scale on a single-line bar (the folded second line uses the secondary 0.85 style)
-      int line; // Line on the folded two-line bar
-      std::function<void()> activate;
-   };
-   ImFont* const tabFont = m_player->m_liveUI->GetOverlayFont() ? m_player->m_liveUI->GetOverlayFont() : ImGui::GetFont();
-   const float tabSize = ImGui::GetFontSize() * 1.6f;
-   const float tracking = tabSize * 0.30f;
-   const float tabGap = 56.f * dpi;
-   vector<Tab> tabs;
+   vector<DesktopTopTab> tabs;
    if (showNav)
    {
-      tabs.push_back({ "GAME", "game", false, 1.f, 1, [this]() { m_player->m_liveUI->HideUI(); } });
-      tabs.push_back({ "TABLE", "table", false, 1.f, 0, [this, rootPath]()
-         {
-            m_selectedGroup = "table";
-            m_inGameUI.NavigateTo(rootPath);
-         } });
-      const string settingsPath = firstPathOf("settings");
-      if (!settingsPath.empty())
-         tabs.push_back({ "SETTINGS", "settings", false, 1.f, 0, [this, settingsPath]()
-            {
-               m_selectedGroup = "settings";
-               m_inGameUI.NavigateTo(settingsPath);
-            } });
-      const string pluginsPath = firstPathOf("plugins");
-      if (!pluginsPath.empty())
-         tabs.push_back({ "PLUGINS", "plugins", false, 1.f, 0, [this, pluginsPath]()
-            {
-               m_selectedGroup = "plugins";
-               m_inGameUI.NavigateTo(pluginsPath);
-            } });
-      const string aboutPath = firstPathOf("misc");
-      if (!aboutPath.empty())
-         tabs.push_back({ "ABOUT", "misc", true, 0.85f, 1, [this, aboutPath]()
-            {
-               m_selectedGroup = "misc";
-               m_inGameUI.NavigateTo(aboutPath);
-            } });
-      // Quit discards the UI and requests the session close, using the same close
-      // state selection as the Exit Game input action
-      tabs.push_back({ "QUIT", "quit", true, 0.85f, 1, [this]()
-         {
-            m_player->m_liveUI->HideUI();
-            m_player->SetCloseState(m_player->HasStackedTableSession() ? Player::CS_STOP_PLAY
-                  : g_isMobile                                         ? Player::CS_CLOSE_CAPTURE_SCREENSHOT
-                  : g_isStandalone                                     ? Player::CS_CLOSE_APP
-                                                                       : Player::CS_STOP_PLAY);
-         } });
+      if (wizardPage != nullptr)
+      {
+         tabs.push_back({ "STARTUP WIZARD", "wizard-title", false, 0, 1.f, nullptr });
+         tabs.push_back({ wizardPage->GetModel().IsFinished() ? "CLOSE" : "CANCEL", "wizard", true, 1, 0.85f, [wizardPage]() { wizardPage->Cancel(); } });
+      }
+      else
+         BuildTopTabs(tabs, rootPath, firstPathOf);
    }
    // Portrait frames always fold the bar to two lines; on landscape it folds
    // when the tab labels don't fit. First line: the left-justified categories;
    // second line: Game (left) and About/Quit (right), in the secondary style
-   bool twoLineTabs = portraitFrame;
-   if (showNav && !twoLineTabs)
-   {
-      float leftW = 28.f * dpi, rightW = 28.f * dpi;
-      for (const Tab& tab : tabs)
-         (tab.right ? rightW : leftW) += SpacedTextWidth(tabFont, tabSize * tab.scale, tab.label, tracking) + tabGap;
-      twoLineTabs = leftW + rightW - tabGap > uiSize.x;
-   }
-   const float tabLineH = ImGui::GetFrameHeight() + 16.f * dpi; // One line of the two-line top bar
-   const float topBarH = showNav ? (twoLineTabs ? 2.f * tabLineH : ImGui::GetFrameHeight() + 40.f * dpi) : 0.f;
-   const float hintH = showNav ? ImGui::GetFrameHeight() + 14.f * dpi : 0.f;
+   const bool twoLineTabs = showNav && DesktopTopBarFolds(m_player, tabs, uiSize.x, portraitFrame);
+   const float topBarH = showNav ? DesktopTopBarHeight(m_player, twoLineTabs) : 0.f;
+   const float hintH = showNav ? DesktopHintBarHeight(m_player) : 0.f;
    const float columnH = uiSize.y - topBarH - hintH;
    // The rail folds to its icon column (slot width + paddings) when the frame is
    // too narrow to afford the full labels, deploying over the item pane on hover
@@ -354,9 +369,12 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
    {
       if (pane.placement != InGameUIPane::Placement::Attached || !pane.render)
          continue;
-      const ImVec2 paneSize = pane.measure ? pane.measure(paneBandW, paneBandH) : ImVec2(paneBandW, paneBandH);
-      if (panesH + paneSize.y + style.ItemSpacing.y > paneBandCap)
-         break; // Keep enough room for the settings list above the pane band
+      // Panes get the room left in the band; fixed size ones (sensor plots) shrink to it rather than being dropped
+      const float roomH = std::min(paneBandH, paneBandCap - panesH - style.ItemSpacing.y);
+      if (roomH < 120.f * dpi)
+         break; // Not enough room left in the band for another pane
+      ImVec2 paneSize = pane.measure ? pane.measure(paneBandW, roomH) : ImVec2(paneBandW, roomH);
+      paneSize.y = std::min(paneSize.y, roomH);
       attachedPanes.push_back({ &pane, paneSize });
       panesH += paneSize.y + style.ItemSpacing.y;
    }
@@ -369,22 +387,29 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
    ImGui::SetNextWindowPos(uiPos);
    ImGui::SetNextWindowSize(uiSize);
    ImGui::SetNextWindowBgAlpha(0.f);
+   // Solid in VR, for readability and as translucent backgrounds would blend with the mixed reality key color
+   const bool opaqueBg = m_player->IsVR();
+   const ImU32 panelBg = opaqueBg ? IM_COL32(18, 18, 26, 255) : IM_COL32(18, 18, 26, 90);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
    ImGui::Begin("##InGameUIDesktop", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
    ImGui::PopStyleVar(); // The window captured a zero padding at Begin; columns keep the standard padding
-   // The chrome fades only when the whole UI closes back to the game (Close
-   // clears the navigation history while the last page animates out); during
-   // page-to-page transitions it stays opaque while the content fades.
-   // GetColorU32-fetched colors are dimmed by the style alpha; explicit colors
-   // must be passed through it
-   const float pageFade = 1.f - fabs(contentPage->GetOpenCloseAnimPos());
-   ImGui::PushStyleVar(ImGuiStyleVar_Alpha, history.empty() ? pageFade : 1.f);
    ImDrawList* const mainDrawList = ImGui::GetWindowDrawList();
    const ImVec2 winPos = ImGui::GetWindowPos();
    if (cabinetInset)
       mainDrawList->AddRect(winPos, winPos + uiSize, ImGui::GetColorU32(IM_COL32(255, 255, 255, 50)), 0.f, 0, 1.f * dpi);
    {
-      const ImU32 dimCol = ImGui::GetColorU32(ImGuiCol_WindowBg, 0.55f);
+      const ImU32 dimCol = ImGui::GetColorU32(ImGuiCol_WindowBg, opaqueBg ? 1.f : 0.55f);
+      // Width-capped wide frame: dim the frame outside the centered chrome
+      // column (drawn on the background list, the window only spans the column)
+      if (uiPos.x > 0.f)
+      {
+         ImDrawList* const bgDrawList = ImGui::GetBackgroundDrawList();
+         bgDrawList->AddRectFilled(ImVec2(0.f, 0.f), ImVec2(uiPos.x, io.DisplaySize.y), dimCol);
+         bgDrawList->AddRectFilled(ImVec2(uiPos.x + uiSize.x, 0.f), io.DisplaySize, dimCol);
+         const ImU32 edgeCol = ImGui::GetColorU32(IM_COL32(255, 255, 255, 25));
+         bgDrawList->AddLine(ImVec2(uiPos.x, 0.f), ImVec2(uiPos.x, io.DisplaySize.y), edgeCol);
+         bgDrawList->AddLine(ImVec2(uiPos.x + uiSize.x, 0.f), ImVec2(uiPos.x + uiSize.x, io.DisplaySize.y), edgeCol);
+      }
       const float bandTop = topBarH + columnH - contentPanesH;
       mainDrawList->AddRectFilled(winPos, winPos + ImVec2(uiSize.x, bandTop), dimCol);
       mainDrawList->AddRectFilled(winPos + ImVec2(0.f, bandTop), winPos + ImVec2(railW, topBarH + columnH), dimCol);
@@ -396,29 +421,21 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       // when selected — Table/Settings/Plugins left, About/Quit on the right.
       // Folded to two lines on portrait frames or on overflow: categories on the
       // first line, Game (left) and About/Quit (right) on the second
-      mainDrawList->AddRectFilled(winPos, winPos + ImVec2(uiSize.x, topBarH), ImGui::GetColorU32(IM_COL32(0, 0, 0, 120)));
-      mainDrawList->AddLine(winPos + ImVec2(0.f, topBarH), winPos + ImVec2(uiSize.x, topBarH), ImGui::GetColorU32(IM_COL32(255, 255, 255, 28)));
-      // One left and one right accumulator per line: left-justified tabs advance
-      // left-to-right, right-justified ones accumulate right-to-left, rightmost first
-      float tabX[2] = { winPos.x + 28.f * dpi, winPos.x + 28.f * dpi };
-      float tabXRight[2] = { winPos.x + uiSize.x - 28.f * dpi, winPos.x + uiSize.x - 28.f * dpi };
       // The rail is empty for a group reduced to a single page (no rows are
       // rendered): activating the tab must then descend straight to the items,
       // the empty rail level being skipped by the render-time normalization
       const auto railEmpty = [&groups, this](const char* groupId)
       {
-         if ("table"s == groupId)
-            return false; // Always has the Table Info row
          if ("plugins"s == groupId)
             return m_pluginEntries.empty();
          for (const Group& g : groups)
             if (g.id == groupId)
-               return g.entries.size() <= 1;
+               return g.entries.size() + (NavRootRailLabel(groupId) != nullptr ? 1 : 0) <= 1;
          return false; // Action tabs (Game/Quit) do not navigate to a page
       };
       m_navTabs.clear();
-      for (const Tab& tab : tabs)
-         m_navTabs.push_back({ tab.label, tab.activate, railEmpty(tab.group) });
+      for (const DesktopTopTab& tab : tabs)
+         m_navTabs.push_back({ tab.label, tab.activate, railEmpty(tab.group.c_str()) });
       // The tab focus syncs to the selected group when entering the level
       if (m_navTabIndex < 0)
       {
@@ -431,47 +448,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
             }
       }
       m_navTabIndex = std::clamp(m_navTabIndex, 0, (int)tabs.size() - 1);
-      const auto renderTab = [&](int i)
-      {
-         const Tab& tab = tabs[i];
-         // On the folded bar, each tab renders on its assigned line at the
-         // secondary style
-         const int line = twoLineTabs ? tab.line : 0;
-         const float size = tabSize * (twoLineTabs && line == 1 ? 0.85f : tab.scale);
-         const float w = SpacedTextWidth(tabFont, size, tab.label, tracking);
-         const float lineY = winPos.y + line * tabLineH;
-         const float lineH = twoLineTabs ? tabLineH : topBarH;
-         const float x = tab.right ? (tabXRight[line] -= w, tabXRight[line]) : tabX[line];
-         ImGui::SetCursorScreenPos(ImVec2(x, lineY));
-         const bool pressed = ImGui::InvisibleButton(std::format("##tab{}", tab.group).c_str(), ImVec2(w, lineH));
-         const bool hovered = ImGui::IsItemHovered();
-         const bool selected = m_selectedGroup == tab.group;
-         const bool focused = m_inGameUI.IsFlipperNav() && m_navLevel == NavLevel::TopTabs && i == m_navTabIndex;
-         const float textY = lineY + (lineH - size) * 0.5f;
-         DrawSpacedText(mainDrawList, tabFont, size, ImVec2(x, textY), tracking, ImGui::GetColorU32(selected || hovered || focused ? ImGuiCol_Text : ImGuiCol_TextDisabled), tab.label);
-         if (selected)
-            mainDrawList->AddLine(ImVec2(x, textY + size + 5.f * dpi), ImVec2(x + w, textY + size + 5.f * dpi), ImGui::GetColorU32(IM_COL32(51, 153, 255, 255)), 2.f * dpi);
-         if (focused)
-            mainDrawList->AddRect(ImVec2(x - 8.f * dpi, lineY + 4.f * dpi), ImVec2(x + w + 8.f * dpi, lineY + lineH - 4.f * dpi), ImGui::GetColorU32(kFocusColor), 6.f * dpi, 0, 2.5f * dpi);
-         if (tab.right)
-            tabXRight[line] -= tabGap;
-         else
-            tabX[line] += w + tabGap;
-         // A thin vertical bar sets the first tab (back to the game) apart —
-         // only on the single-line bar; in two-line mode GAME is already set
-         // apart on its own line and the bar would float mid-line
-         if (i == 0 && !twoLineTabs)
-         {
-            const float sepX = x + w + tabGap * 0.5f;
-            mainDrawList->AddLine(ImVec2(sepX, lineY + lineH * 0.28f), ImVec2(sepX, lineY + lineH * 0.72f), ImGui::GetColorU32(IM_COL32(255, 255, 255, 60)), 1.f * dpi);
-         }
-         if (pressed)
-            tab.activate();
-      };
-      for (int i = 0; i < (int)tabs.size() && !tabs[i].right; ++i)
-         renderTab(i);
-      for (int i = (int)tabs.size() - 1; i >= 0 && tabs[i].right; --i)
-         renderTab(i);
+      RenderDesktopTopBar(m_player, mainDrawList, winPos, uiSize.x, tabs, twoLineTabs, m_selectedGroup, m_inGameUI.IsFlipperNav() && m_navLevel == NavLevel::TopTabs ? m_navTabIndex : -1);
    }
 
    ImGui::SetCursorPos(ImVec2(0.f, topBarH));
@@ -480,7 +457,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       // The plunger page's rail icon is the editor's plunger image, not a font glyph
       if (!m_plungerIcon && !m_plungerLoadFailed)
       {
-         if (std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "editor/plunger.png")); tex != nullptr)
+         if (std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "editor/plunger.webp")); tex != nullptr)
             m_plungerIcon = std::make_shared<Sampler>(m_player->m_renderer->m_renderDevice, "InGameUIPlungerIcon"s, tex, false);
          else
             m_plungerLoadFailed = true;
@@ -496,15 +473,20 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
             inRail |= entry->path == activePath;
       const bool subPage = history.size() > 1 && !inRail;
       // Single-page categories keep the column width but need no entries
-      const bool showRows = !subPage && selectedGroup != nullptr && (selectedGroup->entries.size() > 1 || m_selectedGroup == "table");
+      const bool showRows = !subPage && selectedGroup != nullptr && (selectedGroup->entries.size() > 1 || NavRootRailLabel(m_selectedGroup) != nullptr);
       // Build the rail's rows (also the flipper-nav order for this level)
       m_navRailRows.clear();
-      if (subPage)
+      if (wizardPage != nullptr)
+      {
+         for (int step = 0; step < wizardPage->GetStepCount(); ++step)
+            m_navRailRows.push_back({ false, wizardPage->GetStepTitle(step), std::format("wizard/step/{}", step), [wizardPage, step]() { wizardPage->GoToStep(step); } });
+      }
+      else if (subPage)
          m_navRailRows.push_back({ true, "Back"s, ""s });
       else
       {
-         if (m_selectedGroup == "table")
-            m_navRailRows.push_back({ false, "Table Info"s, rootPath });
+         if (const char* const rootLabel = NavRootRailLabel(m_selectedGroup); rootLabel != nullptr)
+            m_navRailRows.push_back({ false, rootLabel, rootPath });
          if (m_selectedGroup == "plugins")
             // Each plugin is a subsection; the plugins home itself is the content
             for (const NavEntry& entry : m_pluginEntries)
@@ -513,15 +495,14 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
             for (const NavEntry* entry : selectedGroup->entries)
                m_navRailRows.push_back({ false, entry->label, entry->path });
       }
-      // Pages without any focusable item have no item level: skip it (the
-      // navigation source page is one — its table of contents is the rail)
+      // Pages without any focusable item have no item level: skip it
       if (m_navLevel == NavLevel::PageItems && !HasNavFocusableItem(*contentPage))
          m_navLevel = NavLevel::SideRail;
       // The rail focus syncs to the selected entry when entering the level
       if (m_navRailIndex < 0)
       {
-         m_navRailIndex = 0;
-         for (int i = 0; i < (int)m_navRailRows.size(); ++i)
+         m_navRailIndex = wizardPage != nullptr ? wizardPage->GetStepIndex() : 0;
+         for (int i = 0; wizardPage == nullptr && i < (int)m_navRailRows.size(); ++i)
             if (!m_navRailRows[i].isBack && m_navRailRows[i].path == selectedNavPath)
             {
                m_navRailIndex = i;
@@ -542,19 +523,30 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       {
          const RailNav& row = m_navRailRows[i];
          const bool focused = labels && m_inGameUI.IsFlipperNav() && m_navLevel == NavLevel::SideRail && i == m_navRailIndex;
+         string wizardNumber;
          const char* icon = row.isBack ? ICON_LC_CIRCLE_ARROW_LEFT : row.path == rootPath ? ICON_LC_INFO : m_selectedGroup == "plugins" ? ICON_LC_BOX : PathIcon(row.path);
+         if (wizardPage != nullptr)
+         {
+            wizardNumber = std::to_string(i + 1);
+            icon = wizardNumber.c_str();
+         }
          const auto iconImage = row.path == "settings/plunger" ? m_plungerIcon : nullptr;
-         const bool selected = !row.isBack && row.path == selectedNavPath;
-         if (NavRow(icon, labels ? row.label.c_str() : nullptr, selected, row.isBack ? "back" : row.path.c_str(), iconImage, focused))
+         const bool selected = wizardPage != nullptr ? i == wizardPage->GetStepIndex() : !row.isBack && row.path == selectedNavPath;
+         const bool rowPressed = wizardPage != nullptr ? WizardNavRow(i, wizardPage->GetStepIndex(), (int)m_navRailRows.size(), labels ? row.label.c_str() : nullptr, focused)
+                                                       : NavRow(icon, labels ? row.label.c_str() : nullptr, selected, row.isBack ? "back" : row.path.c_str(), iconImage, focused);
+         if (rowPressed)
          {
             if (row.isBack)
                m_inGameUI.NavigateBack();
+            else if (row.activate)
+               row.activate();
             else
                m_inGameUI.NavigateTo(row.path);
          }
       }
    };
 
+   bool uiListHovered = false; // Mouse over the rail or the content column (where a drag scrolls instead of moving the window)
    if (showNav)
    {
       // The folded rail deploys over the item pane while interacted with: hovered,
@@ -563,6 +555,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       const bool navRail = m_inGameUI.IsFlipperNav() && m_navLevel == NavLevel::SideRail;
       const ImVec2 railMin(uiPos.x, uiPos.y + topBarH);
       const bool railHovered = ImGui::IsMouseHoveringRect(railMin, railMin + ImVec2(m_railDeployed ? subW : railW, columnH));
+      uiListHovered |= railHovered;
       m_railDeployed = foldRail && (navRail || railHovered);
       // The folded rail smoothly widens to its deployed width and back
       m_railDeployAnim += ((m_railDeployed ? 1.f : 0.f) - m_railDeployAnim) * std::min(1.f, elapsedS * 10.f);
@@ -576,7 +569,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       {
          // The selected category's sub-pages: flat list, icon + large label, accent
          // side bar and slight highlight on the selected one
-         ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(18, 18, 26, 90));
+         ImGui::PushStyleColor(ImGuiCol_ChildBg, panelBg);
          ImGui::BeginChild("##SubPages", ImVec2(railW, columnH), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
          ImGui::PopStyleColor();
          UpdateDragScroll();
@@ -589,17 +582,15 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       ImGui::SameLine(0.f, 0.f);
    }
 
-   // The content column always follows the page open/close animation
-   ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * pageFade);
-   ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(18, 18, 26, 90));
+   ImGui::PushStyleColor(ImGuiCol_ChildBg, panelBg);
    ImGui::BeginChild("##Content", ImVec2(contentSize.x, contentSize.y - contentPanesH), ImGuiChildFlags_None);
    ImGui::PopStyleColor();
    ImGui::PushFont(nullptr, ImGui::GetFontSize() * 1.25f);
-   RenderContentPage(*contentPage, contentPanes, contentPage == rootPage, activePath);
+   RenderContentPage(*contentPage, contentPanes, showNav && contentPage == rootPage, activePath);
    ImGui::PopFont();
-   contentPage->SetWindowState(contentPos, contentSize, ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem));
+   // Only the content column: a drag on the UI window background (top bar, pane band, margins) still moves the window (display settings)
+   uiListHovered |= ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
    ImGui::EndChild();
-   ImGui::PopStyleVar();
    float paneY = cabinetInset ? uiPos.y - 12.f * dpi - panesH + style.ItemSpacing.y : contentPos.y + contentSize.y - panesH + style.ItemSpacing.y;
    const float paneBandX = cabinetInset ? uiPos.x : contentPos.x;
    for (const auto& [pane, paneSize] : attachedPanes)
@@ -642,12 +633,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
          break;
       }
       // [key chip] label pairs, like the live editor's status bar hints
-      struct Hint
-      {
-         string key;
-         const char* label;
-      };
-      vector<Hint> hints;
+      vector<DesktopHint> hints;
       //hints.push_back({ mappingLabel(m_player->m_pininput.GetUIUpActionId()) + " / "s + mappingLabel(m_player->m_pininput.GetUIDownActionId()), navVerb });
       //hints.push_back({ mappingLabel(m_player->m_pininput.GetUILeftActionId()) + " / "s + mappingLabel(m_player->m_pininput.GetUIRightActionId()), selVerb });
       //hints.push_back({ mappingLabel(m_player->m_pininput.GetExitGameActionId()), "Back" });
@@ -691,61 +677,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
             hints.push_back({ "Start"s, "Save" });
       }
 
-      // Chips are sized on the glyphs' ink bounds like in the live editor:
-      // CalcTextSize only covers advances and the line height, and icon glyphs
-      // would overflow the chip. One chip height for the whole row.
-      const float chipPadX = 5.f * dpi, chipPadY = 1.f * dpi, gap = 6.f * dpi, hintGap = 18.f * dpi;
-      const float textH = ImGui::GetFontSize();
-      const auto keyInkBounds = [textH](const string& key, float& x0, float& x1, float& y0, float& y1)
-      {
-         const ImVec4 ink = TextInkBounds(key.c_str());
-         x0 = ink.x;
-         x1 = ImMax(ink.z, ImGui::CalcTextSize(key.c_str()).x); // union with the layout box
-         y0 = ink.y;
-         y1 = ImMax(ink.w, textH);
-      };
-      float chipTop = 0.f, chipBottom = textH;
-      const auto measureHints = [&]() -> float
-      {
-         chipTop = 0.f;
-         chipBottom = textH;
-         float w = 0.f;
-         for (const Hint& hint : hints)
-         {
-            float x0, x1, y0, y1;
-            keyInkBounds(hint.key, x0, x1, y0, y1);
-            chipTop = ImMin(chipTop, y0);
-            chipBottom = ImMax(chipBottom, y1);
-            w += (x1 - x0) + 2.f * chipPadX + gap + ImGui::CalcTextSize(hint.label).x + hintGap;
-         }
-         return w - hintGap;
-      };
-      float totalW = measureHints();
-      // The two first hints are the universal UI navigation hints, the same on
-      // every page: drop them when the bar cannot fit all the hints
-      if (totalW > uiSize.x && hints.size() > 2)
-      {
-         hints.erase(hints.begin(), hints.begin() + 2);
-         totalW = measureHints();
-      }
-
-      const float hintY = winPos.y + topBarH + columnH;
-      const float textY = hintY + (hintH - textH) * 0.5f;
-      mainDrawList->AddRectFilled(ImVec2(winPos.x, hintY), ImVec2(winPos.x + uiSize.x, hintY + hintH), ImGui::GetColorU32(IM_COL32(0, 0, 0, 120)));
-      mainDrawList->AddLine(ImVec2(winPos.x, hintY), ImVec2(winPos.x + uiSize.x, hintY), ImGui::GetColorU32(IM_COL32(255, 255, 255, 28)));
-      float x = winPos.x + (uiSize.x - totalW) * 0.5f;
-      for (const Hint& hint : hints)
-      {
-         float inkX0, inkX1, inkY0, inkY1;
-         keyInkBounds(hint.key, inkX0, inkX1, inkY0, inkY1);
-         const ImVec2 chipMin(x, textY + chipTop - chipPadY);
-         const ImVec2 chipMax(x + (inkX1 - inkX0) + 2.f * chipPadX, textY + chipBottom + chipPadY);
-         mainDrawList->AddRectFilled(chipMin, chipMax, ImGui::GetColorU32(IM_COL32(255, 255, 255, 20)), 3.f * dpi);
-         mainDrawList->AddRect(chipMin, chipMax, ImGui::GetColorU32(IM_COL32(255, 255, 255, 50)), 3.f * dpi);
-         mainDrawList->AddText(ImVec2(chipMin.x + chipPadX - inkX0, chipMin.y + chipPadY - chipTop), ImGui::GetColorU32(ImGuiCol_Text), hint.key.c_str());
-         mainDrawList->AddText(ImVec2(chipMax.x + gap, textY), ImGui::GetColorU32(ImGuiCol_TextDisabled), hint.label);
-         x = chipMax.x + gap + ImGui::CalcTextSize(hint.label).x + hintGap;
-      }
+      RenderDesktopHintBar(m_player, mainDrawList, ImVec2(winPos.x, winPos.y + topBarH + columnH), uiSize.x, hints);
    }
 
    // The folded rail, drawn last so it deploys over the item pane: it widens
@@ -755,7 +687,7 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
    if (showNav && foldRail)
    {
       const float railAnimW = railW + (subW - railW) * m_railDeployAnim;
-      ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(18, 18, 26, 90 + (int)(150.f * m_railDeployAnim)));
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(18, 18, 26, opaqueBg ? 255 : 90 + (int)(150.f * m_railDeployAnim)));
       ImGui::SetCursorScreenPos(ImVec2(uiPos.x, uiPos.y + topBarH));
       ImGui::BeginChild("##SubPages", ImVec2(railAnimW, columnH), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
       ImGui::PopStyleColor();
@@ -768,17 +700,25 @@ void InGameUIDesktopRenderer::RenderPages(const vector<InGameUIPage*>& pages, fl
       mainDrawList->AddLine(winPos + ImVec2(railW, topBarH), winPos + ImVec2(railW, topBarH + columnH), ImGui::GetColorU32(IM_COL32(255, 255, 255, (int)(25.f * (1.f - m_railDeployAnim)))));
    }
 
-   ImGui::PopStyleVar(); // Alpha fade
    ImGui::End();
+   contentPage->SetWindowState(contentPos, contentSize, uiListHovered || ImGui::IsAnyItemHovered() || IsWidgetActive());
 
    for (InGameUIPage* page : pages)
       RenderInputActionPopup(m_player, *page);
+}
+
+// The root page is the navigation source (top tabs + rail) only when it has navigation items: the UI may also open
+// directly on another page (rules card, POV edit, input profile popup)
+bool InGameUIDesktopRenderer::IsNavSource(const InGameUIPage& page) const
+{
+   return &page == m_inGameUI.GetRootPage() && !m_navEntries.empty();
 }
 
 // Whether the item takes part in the flipper-nav item cycle: it must be
 // selectable and actually rendered in the content pane. The core Back action is
 // rendered by the rail row / back navigation, and the navigation source page
 // does not re-render its table of contents (it is the top tabs and rail)
+
 bool InGameUIDesktopRenderer::IsItemNavFocusable(const InGameUIPage& page, int index) const
 {
    const auto& items = page.GetItems();
@@ -787,19 +727,18 @@ bool InGameUIDesktopRenderer::IsItemNavFocusable(const InGameUIPage& page, int i
    const InGameUIItem& item = *items[index];
    if (!item.IsSelectable() || item.m_type == InGameUIItem::Type::Back)
       return false;
-   if (&page == m_inGameUI.GetRootPage()
+   if (IsNavSource(page)
       && (item.m_type == InGameUIItem::Type::Navigation || (item.m_type == InGameUIItem::Type::Label && item.m_labelType == InGameUIItem::LabelType::Header)))
       return false;
    return true;
 }
 
 // Whether the page has at least one item taking part in the flipper-nav item
-// cycle; the navigation source page always reports none since its table of
-// contents is navigated through the top tabs and the rail, not the item pane
+// cycle; on the navigation source page, only its own actions count (e.g. the
+// homepage runnables) since its table of contents is navigated through the top
+// tabs and the rail, not the item pane
 bool InGameUIDesktopRenderer::HasNavFocusableItem(const InGameUIPage& page) const
 {
-   if (&page == m_inGameUI.GetRootPage())
-      return false;
    const auto& items = page.GetItems();
    for (int i = 0; i < (int)items.size(); ++i)
       if (IsItemNavFocusable(page, i))
@@ -829,16 +768,15 @@ void InGameUIDesktopRenderer::EnsureNavSelection(InGameUIPage& page, int directi
 }
 
 // First navigation press while the focus is not shown: engages flipper
-// navigation, landing on the categories when on the navigation source page (the
-// top of the hierarchy), and normalizes the item selection
+// navigation at the top header and normalizes the item selection
 void InGameUIDesktopRenderer::EngageNav(InGameUIPage* page, int direction)
 {
    m_navWasActive = true;
-   if (page != nullptr && page == m_inGameUI.GetRootPage())
-   {
-      m_navLevel = NavLevel::TopTabs;
-      m_navTabIndex = -1; // Syncs to the selected category at next render
-   }
+   // Keyboard/controller navigation starts at the top of the navigation
+   // hierarchy; pages without navigation chrome normalize this back to their
+   // item level during rendering.
+   m_navLevel = NavLevel::TopTabs;
+   m_navTabIndex = -1; // Syncs to the selected group at next render
    if (page != nullptr)
       EnsureNavSelection(*page, direction);
 }
@@ -907,7 +845,8 @@ bool InGameUIDesktopRenderer::OnUIAdjust(InGameUIPage* page, float direction, bo
          if (m_navTabIndex >= 0 && m_navTabIndex < (int)m_navTabs.size())
          {
             const TabNav& tab = m_navTabs[m_navTabIndex];
-            tab.activate();
+            if (tab.activate)
+               tab.activate();
             // Descend on the first item of the activated category's rail; the
             // tracked path follows the navigation so the frame render does not
             // reset the level we just descended to
@@ -929,6 +868,8 @@ bool InGameUIDesktopRenderer::OnUIAdjust(InGameUIPage* page, float direction, bo
             const RailNav row = m_navRailRows[m_navRailIndex];
             if (row.isBack)
                m_inGameUI.NavigateBack();
+            else if (row.activate)
+               row.activate();
             else
                m_inGameUI.NavigateTo(row.path);
             const auto& history = m_inGameUI.GetNavigationHistory();
@@ -968,8 +909,15 @@ bool InGameUIDesktopRenderer::OnUIReleaseAdjust(InGameUIPage* page)
 // the page history (or closes the UI on the root page)
 bool InGameUIDesktopRenderer::OnUINavigateBack(InGameUIPage* page)
 {
+   if (StartupWizardPage* const wizard = dynamic_cast<StartupWizardPage*>(page))
+   {
+      wizard->BackOrCancel();
+      return true;
+   }
    if (m_modalActive || !m_navWasActive)
       return false; // A modal pane owns its input; mouse mode navigates the history directly
+   if (m_navEntries.empty())
+      return false; // No navigation chrome: no levels to climb, navigate the history directly
    switch (m_navLevel)
    {
    case NavLevel::PageItems:
@@ -995,6 +943,64 @@ bool InGameUIDesktopRenderer::OnUINavigateBack(InGameUIPage* page)
 
 // A sub-category row: icon + large label, accent side bar and slight background
 // highlight when selected, fill highlight when hovered or keyboard-focused
+bool InGameUIDesktopRenderer::WizardNavRow(int step, int activeStep, int stepCount, const char* label, bool focused)
+{
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float dpi = m_player->m_liveUI->GetDPI();
+   ImFont* const font = ImGui::GetFont();
+   const float labelSize = ImGui::GetFontSize() * 1.45f;
+   const float rowH = labelSize + 14.f * dpi;
+   const ImVec2 pos = ImGui::GetCursorScreenPos();
+   const float w = ImGui::GetContentRegionAvail().x;
+   const bool pressed = ImGui::InvisibleButton(std::format("##wizardstep{}", step).c_str(), ImVec2(w, rowH));
+   if (ImGui::IsItemActive())
+      m_dragPassThroughId = ImGui::GetItemID();
+   const bool hovered = ImGui::IsItemHovered() || focused;
+   if (focused)
+   {
+      const float rowStartY = ImGui::GetCursorPosY() - rowH;
+      if (rowStartY - ImGui::GetScrollY() < 0.f)
+         ImGui::SetScrollY(rowStartY);
+      else if (rowStartY + rowH - ImGui::GetScrollY() > ImGui::GetWindowHeight())
+         ImGui::SetScrollY(std::min(rowStartY + rowH - ImGui::GetWindowHeight(), rowStartY));
+   }
+   ImDrawList* const dl = ImGui::GetWindowDrawList();
+   const float rowX = pos.x - style.WindowPadding.x;
+   const float rowW = w + 2.f * style.WindowPadding.x;
+   const bool processed = step <= activeStep;
+   if (step == activeStep || hovered)
+      dl->AddRectFilled(ImVec2(rowX, pos.y), ImVec2(rowX + rowW, pos.y + rowH), ImGui::GetColorU32(step == activeStep ? IM_COL32(255, 255, 255, 24) : IM_COL32(255, 255, 255, 12)));
+   if (step == activeStep)
+      dl->AddRectFilled(ImVec2(rowX, pos.y), ImVec2(rowX + 3.f * dpi, pos.y + rowH), ImGui::GetColorU32(kAccentColor));
+   if (focused)
+      dl->AddRect(ImVec2(rowX, pos.y), ImVec2(rowX + rowW, pos.y + rowH), ImGui::GetColorU32(kFocusColor), 4.f * dpi, 0, 2.5f * dpi);
+
+   const float slot = labelSize + 8.f * dpi;
+   const float cx = pos.x + slot * 0.5f;
+   const float cy = pos.y + rowH * 0.5f;
+   const float radius = labelSize * 0.50f;
+   if (step + 1 < stepCount)
+   {
+      const bool processedLink = step + 1 <= activeStep;
+      dl->AddLine(ImVec2(cx, cy + radius), ImVec2(cx, pos.y + rowH + rowH * 0.5f - radius), ImGui::GetColorU32(processedLink ? ImGuiCol_Text : ImGuiCol_TextDisabled),
+         (processedLink ? 3.f : 1.f) * dpi);
+   }
+   const ImU32 circleCol = ImGui::GetColorU32(processed ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+   if (processed)
+      dl->AddCircleFilled(ImVec2(cx, cy), radius, circleCol, 24);
+   else
+      dl->AddCircle(ImVec2(cx, cy), radius, circleCol, 24, 1.5f * dpi);
+   const string number = std::to_string(step + 1);
+   const ImVec2 textSize = font->CalcTextSizeA(labelSize * 0.72f, FLT_MAX, 0.f, number.c_str());
+   dl->AddText(font, labelSize * 0.72f, ImVec2(cx - textSize.x * 0.5f, cy - textSize.y * 0.5f), processed ? IM_COL32(0, 0, 0, 255) : circleCol, number.c_str());
+   if (label != nullptr)
+   {
+      const ImU32 textCol = ImGui::GetColorU32(step == activeStep || hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+      dl->AddText(font, labelSize, ImVec2(pos.x + slot + 12.f * dpi, pos.y + (rowH - labelSize) * 0.5f), textCol, label);
+   }
+   return pressed;
+}
+
 bool InGameUIDesktopRenderer::NavRow(const char* icon, const char* label, bool selected, const char* id, const std::shared_ptr<Sampler>& iconImage, bool focused)
 {
    const ImGuiStyle& style = ImGui::GetStyle();
@@ -1005,6 +1011,8 @@ bool InGameUIDesktopRenderer::NavRow(const char* icon, const char* label, bool s
    const ImVec2 pos = ImGui::GetCursorScreenPos();
    const float w = ImGui::GetContentRegionAvail().x;
    const bool pressed = ImGui::InvisibleButton(std::format("##{}", id).c_str(), ImVec2(w, rowH));
+   if (ImGui::IsItemActive())
+      m_dragPassThroughId = ImGui::GetItemID();
    const bool hovered = ImGui::IsItemHovered() || focused;
    // Keep the flipper-nav focused row inside the rail's visible area (the
    // cursor pos is in document space, the scroll adjusts the visible offset).
@@ -1051,9 +1059,18 @@ bool InGameUIDesktopRenderer::NavRow(const char* icon, const char* label, bool s
 // Drag-to-scroll for scrollable panes: press inside a pane, hold and move up/down
 // to drag its content (VR controller trigger or mouse button), with a short
 // inertial glide on release. Must be called right after the pane's BeginChild.
+// Whether a widget is active: a press on a window background also activates the window's MoveId (even with NoMove), which is not one
+bool InGameUIDesktopRenderer::IsWidgetActive()
+{
+   const ImGuiContext& g = *GImGui;
+   return g.ActiveId != 0 && !(g.ActiveIdWindow && g.ActiveIdWindow->MoveId == g.ActiveId);
+}
+
 void InGameUIDesktopRenderer::UpdateDragScroll()
 {
-   constexpr float kDragThreshold = 6.f; // px before we commit to a drag
+   // Deadzone before a press commits to a drag, much wider for the VR pointer:
+   // its controller aim always drifts a few px while the trigger is pulled
+   const float kDragThreshold = (m_player->IsVR() ? 24.f : 6.f) * m_player->m_liveUI->GetDPI();
    constexpr float kFriction = 8.f; // deceleration rate (higher = quicker stop)
    constexpr float kVelocitySmooth = 0.2f; // EMA weight for velocity sampling
    const ImGuiIO& io = ImGui::GetIO();
@@ -1065,6 +1082,7 @@ void InGameUIDesktopRenderer::UpdateDragScroll()
       m_isDraggingScroll = false;
       m_dragScrollPaneId = paneId;
       m_dragScrollStartPos = ImGui::GetMousePos();
+      m_dragScrollStartScrollY = ImGui::GetScrollY();
       m_dragScrollVelocity = 0.f;
    }
    if (paneId != m_dragScrollPaneId)
@@ -1087,11 +1105,29 @@ void InGameUIDesktopRenderer::UpdateDragScroll()
       return;
    }
    if (!m_isDraggingScroll)
-      m_isDraggingScroll = fabsf(ImGui::GetMousePos().y - m_dragScrollStartPos.y) > kDragThreshold;
+   {
+      if (fabsf(ImGui::GetMousePos().y - m_dragScrollStartPos.y) > kDragThreshold)
+      {
+         const ImGuiID activeId = ImGui::GetActiveID();
+         if (IsWidgetActive() && activeId != m_dragPassThroughId)
+         {
+            // A widget owns this drag (slider, text selection, ...): no pane scrolling
+            m_dragScrollPaneId = 0;
+            m_dragScrollVelocity = 0.f;
+            return;
+         }
+         m_isDraggingScroll = true;
+      }
+   }
    else
    {
       const float dy = io.MouseDelta.y;
       ImGui::SetScrollY(ImGui::GetScrollY() - dy);
+      // The press turns into a scroll only once the pane really moved away from
+      // its press offset: aim drift during a trigger pull (VR), or a drag a
+      // pane at its scroll limits cannot follow, must not eat the click
+      if (ImGui::GetActiveID() != 0 && fabsf(ImGui::GetScrollY() - m_dragScrollStartScrollY) > kDragThreshold)
+         ImGui::ClearActiveID(); // The pressed row must not fire when released after a drag
       const float frameVel = (elapsedS > 0.f) ? (-dy / elapsedS) : 0.f;
       m_dragScrollVelocity = m_dragScrollVelocity * (1.f - kVelocitySmooth) + frameVel * kVelocitySmooth;
    }
@@ -1109,12 +1145,24 @@ void InGameUIDesktopRenderer::RenderContentPage(InGameUIPage& page, const vector
    ImFont* const font = ImGui::GetFont();
    const float titleSize = ImGui::GetFontSize() * 1.8f;
    const float titleLineH = titleSize + 8.f * dpi;
-   // The navigation source page is shown as the "Table Info" sub-category: use
-   // that label instead of its own ("Options & Settings") title
-   const char* title = isNavSource ? "Table Info" : page.GetTitle().c_str();
+   // The navigation source page is shown as its NavRootGroup's root sub-category:
+   // use that label instead of its own ("Options & Settings") title when defined
+   const char* const rootTitle = NavRootPageTitle();
+   string wizardTitle;
+   if (StartupWizardPage* const wizard = dynamic_cast<StartupWizardPage*>(&page))
+      wizardTitle = wizard->GetStepTitle(wizard->GetStepIndex());
+   const char* title = !wizardTitle.empty() ? wizardTitle.c_str() : isNavSource && rootTitle != nullptr ? rootTitle : page.GetTitle().c_str();
    dl->AddText(font, titleSize, titlePos, ImGui::GetColorU32(ImGuiCol_Text), title);
    const float titleW = font->CalcTextSizeA(titleSize, FLT_MAX, 0.f, title).x;
    ImGui::SetCursorScreenPos(titlePos + ImVec2(0.f, (titleSize - ImGui::GetFrameHeight()) * 0.5f));
+   if (dynamic_cast<StartupWizardPage*>(&page) == nullptr && m_navEntries.empty() && !m_inGameUI.GetNavigationHistory().empty()) // History is empty while the UI animates out
+   {
+      // Without navigation chrome there is no rail back row: offer one at the end of the title line
+      const float backW = IconButtonInkSize(ICON_LC_CIRCLE_ARROW_LEFT).x;
+      ImGui::SetCursorScreenPos(ImVec2(titlePos.x + ImGui::GetContentRegionAvail().x - backW, titlePos.y + (titleSize - ImGui::GetFrameHeight()) * 0.5f));
+      if (IconButtonInk(ICON_LC_CIRCLE_ARROW_LEFT, "##PageBack"))
+         m_inGameUI.NavigateBack();
+   }
    dl->AddLine(titlePos + ImVec2(0.f, titleLineH), titlePos + ImVec2(titleW, titleLineH), ImGui::GetColorU32(IM_COL32(255, 255, 255, 60)));
    ImGui::SetCursorScreenPos(titlePos + ImVec2(0.f, titleLineH + 4.f * dpi));
 
@@ -1180,9 +1228,23 @@ void InGameUIDesktopRenderer::RenderContentPage(InGameUIPage& page, const vector
 
    // Item list (scrollable), each row: label + info subtext / right aligned
    // control / thin separator; the action bar sits at the bottom of the pane
-   const float footerH = page.IsAdjustable() ? ImGui::GetFrameHeight() + 18.f * dpi : 0.f;
+   const float footerH = dynamic_cast<StartupWizardPage*>(&page) != nullptr || page.IsAdjustable() ? ImGui::GetFrameHeight() + 18.f * dpi : 0.f;
    ImGui::BeginChild("PageItems", ImVec2(0.f, -footerH), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
    UpdateDragScroll();
+
+   // Header panes sit at the top of the item list and scroll with it (e.g. the
+   // input device diagram); they get the content width and may claim a share
+   // of the visible height
+   for (const InGameUIPane& pane : panes)
+      if (pane.placement == InGameUIPane::Placement::Header && pane.render)
+      {
+         const ImVec2 avail = ImGui::GetContentRegionAvail();
+         const ImVec2 paneSize = pane.measure ? pane.measure(avail.x, avail.y * 0.55f) : ImVec2(avail.x, avail.y * 0.5f);
+         const ImVec2 panePos = ImGui::GetCursorScreenPos();
+         pane.render(ImVec4(panePos.x, panePos.y, paneSize.x, paneSize.y));
+         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + paneSize.y + style.ItemSpacing.y);
+      }
+
    RenderItems(page, panes, isNavSource);
    ImGui::Dummy(ImVec2(0.f, 0.f));
    ImGui::EndChild();
@@ -1239,17 +1301,18 @@ void InGameUIDesktopRenderer::RenderFooterActions(InGameUIPage& page)
          else if (btnStartY + buttonH - ImGui::GetScrollY() > ImGui::GetWindowHeight())
             ImGui::SetScrollY(std::min(btnStartY + buttonH - ImGui::GetWindowHeight(), btnStartY));
       }
-      const bool highlighted = navFocused || ImGui::IsMouseHoveringRect(btnPos, btnPos + ImVec2(buttonW, buttonH));
-      const bool pressed = ImGui::InvisibleButton(std::format("##{}", label).c_str(), ImVec2(buttonW, buttonH));
+      const float actualButtonW = dynamic_cast<StartupWizardPage*>(&page) != nullptr ? (availW - 1.f * style.ItemSpacing.x) * 0.5f : buttonW;
+      const bool highlighted = navFocused || ImGui::IsMouseHoveringRect(btnPos, btnPos + ImVec2(actualButtonW, buttonH));
+      const bool pressed = ImGui::InvisibleButton(std::format("##{}", label).c_str(), ImVec2(actualButtonW, buttonH));
       const ImU32 bg = disabled ? ImGui::GetColorU32(ImGuiCol_FrameBg) : highlighted ? ImGui::GetColorU32(ImGuiCol_ButtonHovered) : ImGui::GetColorU32(ImGuiCol_Button);
-      dl->AddRectFilled(btnPos, btnPos + ImVec2(buttonW, buttonH), bg, style.FrameRounding);
+      dl->AddRectFilled(btnPos, btnPos + ImVec2(actualButtonW, buttonH), bg, style.FrameRounding);
       if (navFocused)
-         dl->AddRect(btnPos, btnPos + ImVec2(buttonW, buttonH), ImGui::GetColorU32(kFocusColor), style.FrameRounding, 0, 2.5f * dpi);
+         dl->AddRect(btnPos, btnPos + ImVec2(actualButtonW, buttonH), ImGui::GetColorU32(kFocusColor), style.FrameRounding, 0, 2.5f * dpi);
       const ImVec4 iconInk = TextInkBounds(icon);
       const float labelW = ImGui::CalcTextSize(label).x;
       const float gap = 10.f * dpi;
       const float contentW = (iconInk.z - iconInk.x) + gap + labelW;
-      const float startX = btnPos.x + (buttonW - contentW) * 0.5f;
+      const float startX = btnPos.x + (actualButtonW - contentW) * 0.5f;
       const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
       dl->AddText(ImVec2(startX - iconInk.x, btnPos.y + (buttonH - (iconInk.w - iconInk.y)) * 0.5f - iconInk.y), col, icon);
       dl->AddText(ImVec2(startX + (iconInk.z - iconInk.x) + gap, btnPos.y + (buttonH - textH) * 0.5f), col, label);
@@ -1261,6 +1324,20 @@ void InGameUIDesktopRenderer::RenderFooterActions(InGameUIPage& page)
       ImGui::EndDisabled();
       ImGui::SameLine(0.f, style.ItemSpacing.x);
    };
+
+   if (StartupWizardPage* const wizard = dynamic_cast<StartupWizardPage*>(&page))
+   {
+      vector<int> footerIndexes;
+      for (int i = 0; i < (int)items.size(); ++i)
+         if (wizard->IsFooterAction(i))
+            footerIndexes.push_back(i);
+      if (!footerIndexes.empty())
+      {
+         for (const int index : footerIndexes)
+            actionButton(index == footerIndexes.back() ? ICON_LC_SAVE : ICON_LC_UNDO_2, items[index]->m_label.c_str(), index, false);
+      }
+      return;
+   }
 
    actionButton(ICON_LC_HEART, "Reset to defaults", resetDefaultsIndex, resetDefaultsIndex < 0);
    actionButton(ICON_LC_UNDO_2, "Undo changes", resetStoredIndex, resetStoredIndex < 0);
@@ -1299,6 +1376,8 @@ void InGameUIDesktopRenderer::RenderItems(InGameUIPage& page, const vector<InGam
          continue;
       // The navigation source page does not re-render its table of contents in the content column
       if (isNavSource && (item->m_type == Navigation || (item->m_type == Label && item->m_labelType == InGameUIItem::LabelType::Header)))
+         continue;
+      if (StartupWizardPage* const wizard = dynamic_cast<StartupWizardPage*>(&page); wizard != nullptr && wizard->IsFooterAction(i))
          continue;
 
       // Section headers get extra breathing room above them
@@ -1387,6 +1466,8 @@ void InGameUIDesktopRenderer::RenderItems(InGameUIPage& page, const vector<InGam
       {
          ImGui::SetCursorScreenPos(rowPos);
          rowPressed = ImGui::InvisibleButton(std::format("##Item{}", i).c_str(), ImVec2(itemAreaW, rowH));
+         if (ImGui::IsItemActive())
+            m_dragPassThroughId = ImGui::GetItemID();
       }
       const bool hovered = navHovered || (!m_inGameUI.IsFlipperNav() && (isMouseOver || rowPressed) && item->IsSelectable());
       if (hovered)
@@ -1448,8 +1529,6 @@ void InGameUIDesktopRenderer::RenderItems(InGameUIPage& page, const vector<InGam
             if (IconButtonInk(ICON_LC_X, std::format("##Item{:d}", i).c_str()))
             {
                item->m_inputAction->ClearMapping();
-               if (item->m_inputAction->IsNavigationAction())
-                  page.RequestInputActionPopup(*item);
             }
             ImGui::SameLine();
          }
@@ -1462,6 +1541,17 @@ void InGameUIDesktopRenderer::RenderItems(InGameUIPage& page, const vector<InGam
          ImGui::SameLine(0.f, style.ItemSpacing.x);
          const string state = item->m_inputAction->IsPressed() ? ICON_LC_DISC : ICON_LC_CIRCLE;
          ImGui::Text("%s", state.c_str());
+         if (item->IsModified())
+         {
+            const ImVec4 ink = TextInkBounds(ICON_LC_PENCIL);
+            itemDrawList->AddText(ImVec2(rowMax.x - markerW + (markerW - (ink.z - ink.x)) * 0.5f - ink.x,
+                                         rowPos.y + (stacked ? itemPadding + (textH - (ink.w - ink.y)) * 0.5f : (rowH - (ink.w - ink.y)) * 0.5f) - ink.y),
+               ImGui::GetColorU32(ImGuiCol_Text), ICON_LC_PENCIL);
+            ImGui::SetCursorScreenPos(ImVec2(rowMax.x - markerW, rowPos.y));
+            ImGui::InvisibleButton(std::format("##marker{}", i).c_str(), ImVec2(markerW, rowH));
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled))
+               ImGui::SetTooltip("%s", "Modified: the current binding differs from the stored one");
+         }
          break;
       }
 
@@ -1496,7 +1586,7 @@ void InGameUIDesktopRenderer::RenderItems(InGameUIPage& page, const vector<InGam
                ImGui::SetNextItemWidth(rowCtlW - style.ItemSpacing.x - butWidth);
                ImGui::InputInt(std::format("##Item{}", i).c_str(), &v, 1, 100, ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                ImGui::SameLine();
-               if (IconButtonInk((Settings::m_propPlayer_PlayfieldWidth.index == id.value().index) ? ICON_LC_MOVE_HORIZONTAL : ICON_LC_MOVE_VERTICAL, std::format("##Item{}", i).c_str()))
+               if (IconButtonInk((Settings::m_propPlayer_PlayfieldWidth.index == id.value().index) ? ICON_LC_MOVE_HORIZONTAL : ICON_LC_MOVE_VERTICAL, std::format("##FillItem{}", i).c_str()))
                   v = prop->m_max;
             }
             else
@@ -1554,7 +1644,7 @@ void InGameUIDesktopRenderer::RenderItems(InGameUIPage& page, const vector<InGam
                ImGui::SetNextItemWidth(rowCtlW - browseButtonWidth - style.ItemSpacing.x);
                ImGui::InputTextWithHint(std::format("##Item{}", i).c_str(), hint, &v);
                ImGui::SameLine();
-               if (IconButtonInk(browseIcon, std::format("##Item{}", i).c_str()))
+               if (IconButtonInk(browseIcon, std::format("##BrowseItem{}", i).c_str()))
                   page.BrowseForPath(*item);
                if (ImGui::IsItemHovered())
                   ImGui::SetTooltip("%s", hint);

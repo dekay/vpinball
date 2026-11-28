@@ -36,6 +36,7 @@
 #include "renderer/VRDevice.h"
 #include "ui/live/LiveUI.h"
 #include "ui/live/ingameui/HomePage.h"
+#include "ui/live/ingameui/StartupWizardModel.h"
 #include "ThreadPool.h"
 #include "tinyxml2/tinyxml2.h"
 #include "unordered_dense.h"
@@ -362,6 +363,9 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
       ShowFatalError(std::format("Renderer initialization error code: {:#010X}", static_cast<unsigned int>(hr)));
       throw hr;
    }
+#ifdef ENABLE_BGFX
+   m_frameMutexHeld = true; // The render device constructor locked the frame mutex for the game thread
+#endif
 
    m_backglassOutput.SetMode(m_ptable->GetSettings(), static_cast<RenderOutput::OutputMode>(m_ptable->GetSettings().GetWindow_Mode(VPXWindowId::VPXWINDOW_Backglass)));
    m_scoreViewOutput.SetMode(m_ptable->GetSettings(), static_cast<RenderOutput::OutputMode>(m_ptable->GetSettings().GetWindow_Mode(VPXWindowId::VPXWINDOW_ScoreView)));
@@ -389,8 +393,6 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    //----------------------------------------------------------------------------------
 
-   // We need to initialize the perf counter before creating the UI which uses it
-   wintimer_init();
    m_liveUI = new LiveUI(m_renderer->m_renderDevice);
    // Route the texture manager memory pressure notifications to the in-game UI
    m_renderer->m_renderDevice->m_texMan.m_notify = [this](const string& message, int lengthMs, unsigned int reuseId) -> unsigned int {
@@ -421,6 +423,12 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    // Initialize the table session: physics, script, per part rendering and timers
    InitTableSession(true);
+   EndStartupLoadingScreen();
+
+   // First-run machine setup: after the loading screen, before any session-specific UI
+   if ((playMode == PlayMode::Play || playMode == PlayMode::Frontend) && VPX::InGameUI::StartupWizardModel::ShouldAutoOpen(g_settingsService.GetAppSettings())
+      && m_liveUI->m_inGameUI.UsesDesktopRenderer() && !IsVR())
+      m_liveUI->OpenInGameUI("settings/startup_wizard"s);
 
    // Open UI if requested (this also disables static prerendering, so must be done before performing it)
    if (playMode == PlayMode::EditPOV)
@@ -459,16 +467,25 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    // Popup notification on startup
    if (m_renderer->m_stereo3D != STEREO_OFF && m_renderer->m_stereo3D != STEREO_VR && !m_renderer->m_stereo3Denabled)
       m_liveUI->PushNotification("3D Stereo is enabled but currently toggled off"s, 4000);
-   const int numberOfTimesToShowTouchMessage = g_settingsService.GetAppSettings().GetPlayer_NumberOfTimesToShowTouchMessage();
-   if (m_pininput.HasTouchInput() && numberOfTimesToShowTouchMessage != 0) //!! visualize with real buttons or at least the areas?? Add extra buttons?
-   {
-      g_settingsService.GetAppSettings().SetPlayer_NumberOfTimesToShowTouchMessage(max(numberOfTimesToShowTouchMessage - 1, 0), false);
-      m_liveUI->PushNotification("You can use Touch controls on this display: bottom left area to Start Game, bottom right area to use the Plunger\n"
-                                 "lower left/right for Flippers, upper left/right for Magna buttons, top left for Credits and top right for the Menu"s,
-         12000);
-   }
+   // Touch screens detected later get the hint on first use (see InputManager::OnTouchScreenUsed)
+   if (m_pininput.HasTouchInput())
+      ShowTouchControlsHint();
 
    SetPlayState(true);
+}
+
+// First launches: present the touch controls by briefly showing their overlay (unless always shown)
+void Player::ShowTouchControlsHint()
+{
+   const int numberOfTimesToShowTouchMessage = g_settingsService.GetAppSettings().GetPlayer_NumberOfTimesToShowTouchMessage();
+   if (m_liveUI == nullptr || m_vrDevice || numberOfTimesToShowTouchMessage == 0 || g_settingsService.GetAppSettings().GetPlayer_TouchOverlay())
+      return;
+   g_settingsService.GetAppSettings().SetPlayer_NumberOfTimesToShowTouchMessage(max(numberOfTimesToShowTouchMessage - 1, 0), false);
+   constexpr int touchHintMs = 12000;
+   m_liveUI->ShowTouchOverlayHint(touchHintMs);
+   m_liveUI->PushNotification("This display supports touch controls, each highlighted area shows what it does.\n"
+                              "To show the areas permanently, open the Menu (top right area) and enable 'Touch Overlay' in 'Input Settings' > 'Touch'."s,
+      touchHintMs);
 }
 
 void Player::LockRenderThread()
@@ -491,6 +508,70 @@ void Player::UnlockRenderThread()
    m_frameMutexHeld = false;
    m_renderer->m_renderDevice->m_frameMutex.unlock();
 #endif
+}
+
+void Player::BeginStartupLoadingScreen()
+{
+#ifdef ENABLE_BGFX
+   // Not in the Android/iOS apps (libvpinball), which show their own loading screen during the whole startup, fed by m_loadProgress
+   if (g_isMobile || IsEditorMode() || m_playMode == PlayMode::CaptureAttract)
+      return;
+#ifdef _WIN32
+   // The script start can block the main thread for seconds: keep the loading screen instead of the '(Not Responding)' ghost
+   // window Windows shows after 5s. Process wide and permanent, so it also applies to the Win32 editor afterwards
+   DisableProcessWindowsGhosting();
+#endif
+   m_isLoading = true;
+   m_isStartupLoading = true;
+   m_startupLoadingPhase = "Initializing physics"s;
+   if (!m_liveUI->m_inGameUI.IsOpened())
+      m_liveUI->m_inGameUI.Open("progress/loading"s);
+   m_playfieldWnd->Show();
+   m_playfieldWnd->RaiseAndFocus();
+   UpdateStartupLoadingScreen(m_startupLoadingPhase);
+#endif
+}
+
+void Player::UpdateStartupLoadingScreen(const string& phase)
+{
+#ifdef ENABLE_BGFX
+   if (!m_isStartupLoading)
+      return;
+   m_startupLoadingPhase = phase;
+   // Render one loading frame: release the game thread's frame ownership and wait (at most 100ms) for the render thread to request a frame
+   const bool wasHeld = m_frameMutexHeld;
+   if (wasHeld)
+      UnlockRenderThread();
+   RenderDevice *const rd = m_renderer->m_renderDevice;
+   for (const uint64_t start = SDL_GetTicksNS() / 1000; SDL_GetTicksNS() / 1000 - start < 100000;)
+   {
+      ProcessOSMessages();
+      if (rd->m_frameRequested && !rd->m_framePending && rd->m_frameMutex.try_lock())
+      {
+         m_frameMutexHeld = true;
+         m_renderer->RenderUIScene();
+         SubmitFrame(); // Hands the recorded frame over to the render thread and releases the render frame mutex
+         m_frameMutexHeld = false;
+         break;
+      }
+      SDL_DelayNS(1000);
+   }
+   if (wasHeld)
+      LockRenderThread();
+#else
+   (void)phase;
+#endif
+}
+
+void Player::EndStartupLoadingScreen()
+{
+   if (!m_isStartupLoading)
+      return;
+   // No final loading frame: the loading page would resume the play that the session start just paused (see InGameUI::Update),
+   // before the physics start. The last loading frame stays on screen until the first game frame.
+   m_liveUI->m_inGameUI.Close(); // While m_isLoading: no play state change, no option event. The page is erased once its closing animation ends
+   m_isStartupLoading = false;
+   m_isLoading = false;
 }
 
 void Player::InitTableSession(const bool isInitial)
@@ -536,6 +617,11 @@ void Player::InitTableSession(const bool isInitial)
    // 'playfield' windowed mode is defined in the settings (not in the table file)
    if (ViewSetup &viewSetup = m_ptable->GetViewSetup(); viewSetup.mMode == VLM_WINDOW)
       viewSetup.SetWindowModeFromSettings(m_ptable);
+
+   // Cabinet autofit, so that the loading screen already uses its view (window mode, which also decides the rotation).
+   // Applied again after the script start (see below)
+   SetCabinetAutoFitMode(m_ptable->GetSettings().GetPlayer_CabinetAutofitMode());
+   SetCabinetAutoFitPos(m_ptable->GetSettings().GetPlayer_CabinetAutofitPos());
 
    m_backglassVolume = dequantizeUnsignedPercent(m_ptable->GetSettings().GetPlayer_MusicVolume());
    m_playfieldVolume = dequantizeUnsignedPercent(m_ptable->GetSettings().GetPlayer_SoundVolume());
@@ -713,6 +799,10 @@ void Player::InitTableSession(const bool isInitial)
       m_renderer->SetFlip(rotation == 0 || rotation == 2 ? ModelViewProj::FLIPX : ModelViewProj::FLIPY);
    }
 
+   // Loading screen for the rest of the startup (the UI rendering needs the physics)
+   if (isInitial)
+      BeginStartupLoadingScreen();
+
    //----------------------------------------------------------------------------------
 
    if (isInitial)
@@ -755,7 +845,7 @@ void Player::InitTableSession(const bool isInitial)
          m_texLoadStats.nPixelsTotal += static_cast<uint64_t>(image->m_width) * image->m_height;
 
 #ifdef ENABLE_BGFX
-      if (m_renderer->m_renderDevice->m_compressTextures && FileExists(m_ptable->m_filename))
+      if (m_renderer->m_renderDevice->m_compressTextures && m_ptable->IsOnDisk())
       {
          // Texture compression relies on its disk cache, so it is disabled entirely when the cache folder is not writable
          const std::filesystem::path texCacheDir = g_app->m_fileLocator.GetTablePath(m_ptable, FileLocator::TableSubFolder::Cache, true);
@@ -889,7 +979,10 @@ void Player::InitTableSession(const bool isInitial)
       for (auto image : preloadImages)
          pool.enqueue_block(loadImage, image, false);
 
-      bool showLoadingUI = false;
+      const bool startupScreen = m_isStartupLoading; // Already open, and stays open after the textures
+      if (startupScreen)
+         m_startupLoadingPhase = "Loading textures"s;
+      bool showLoadingUI = startupScreen;
       while (pool.has_work_in_flight())
       {
          ProcessOSMessages();
@@ -912,20 +1005,20 @@ void Player::InitTableSession(const bool isInitial)
             else
 #endif
             {
-               uOverSleep(100000);
+               SDL_DelayNS(100000);
             }
          }
          else
          {
 #ifdef ENABLE_BGFX
             // Enable a dedicated loading UI while the worker threads load & compress textures, giving the user progress feedback and a way to skip compression
-            // (in VR, the UI is rendered to a dedicated OpenXR composition layer which is acquired by the render thread inside its frame callback)
+            // (in VR, the UI is drawn in the scene as a world-space quad, see LiveUI::RenderUIVR)
             showLoadingUI = (m_playMode != PlayMode::CaptureAttract) && (m_texLoadStats.nCompressed > 0);
             if (showLoadingUI)
             {
                m_isLoading = true;
                if (!m_liveUI->m_inGameUI.IsOpened())
-                  m_liveUI->m_inGameUI.Open("loading"s);
+                  m_liveUI->m_inGameUI.Open("progress/preparing"s);
                m_playfieldWnd->Show();
                m_playfieldWnd->RaiseAndFocus();
             }
@@ -933,7 +1026,7 @@ void Player::InitTableSession(const bool isInitial)
             Sleep(0);
          }
       }
-      if (showLoadingUI)
+      if (showLoadingUI && !startupScreen)
       {
          m_liveUI->m_inGameUI.Close(); // Page is erased once its closing animation completes, during the first gameplay frames
          m_isLoading = false;
@@ -957,6 +1050,7 @@ void Player::InitTableSession(const bool isInitial)
 
    PLOGI << "Initializing renderer"; // For profiling
    m_loadProgress->SetProgress("Initializing Visuals..."s);
+   UpdateStartupLoadingScreen("Initializing visuals"s);
 
    // Setup rendering and timers
    RenderState state;
@@ -981,6 +1075,7 @@ void Player::InitTableSession(const bool isInitial)
    {
       PLOGI << "Starting script"; // For profiling
       m_loadProgress->SetProgress("Starting Game Scripts..."s, m_loadProgress->GetProgress() + progressVisualLength);
+      UpdateStartupLoadingScreen("Starting game scripts"s); // Last frame until the script start returns (it blocks the main thread)
 
       // Setup script interpreter and run the main script
       CComObject<ScriptInterpreter>::CreateInstance(&m_scriptInterpreter);
@@ -1013,7 +1108,7 @@ void Player::InitTableSession(const bool isInitial)
    // Suspend play if started
    SetPlayState(false);
 
-   // Apply cabinet autofit (after script startup as the script may change what is visible and therefore taken in account, like a VR cabinet model)
+   // Cabinet autofit again, as the script may change what is visible and taken into account (e.g. a VR cabinet model)
    SetCabinetAutoFitMode(m_ptable->GetSettings().GetPlayer_CabinetAutofitMode());
    SetCabinetAutoFitPos(m_ptable->GetSettings().GetPlayer_CabinetAutofitPos());
    m_renderer->InvalidateLayout();
@@ -1025,9 +1120,9 @@ void Player::InitTableSession(const bool isInitial)
    m_pluginAPI.OnGameStart();
 
    // Update the play statistics of the frontend info file along the table (see docs/FileLayout.md)
-   m_trackTableSessionStats = !IsEditorMode() && (m_playMode != PlayMode::CaptureAttract);
+   m_trackTableSessionStats = !IsEditorMode() && (m_playMode != PlayMode::CaptureAttract) && (m_playMode != PlayMode::Frontend);
    m_tableSessionPlayTime = 0;
-   m_tableSessionStartTime = (m_trackTableSessionStats && m_playing) ? usec() : 0;
+   m_tableSessionStartTime = (m_trackTableSessionStats && m_playing) ? SDL_GetTicksNS() / 1000 : 0;
    if (m_trackTableSessionStats)
       m_ptable->UpdateInfoFileOnGameStart();
 }
@@ -1035,7 +1130,7 @@ void Player::InitTableSession(const bool isInitial)
 void Player::LoadUsedTextures()
 {
    m_usedTextures.clear();
-   if ((m_ptable->GetSettings().GetPlayer_CacheMode() <= 0) || !FileExists(m_ptable->m_filename))
+   if ((m_ptable->GetSettings().GetPlayer_CacheMode() <= 0) || !m_ptable->IsOnDisk())
       return;
    try
    {
@@ -1067,7 +1162,18 @@ void Player::LoadUsedTextures()
 
 void Player::SaveUsedTextures()
 {
-   if ((m_ptable->GetSettings().GetPlayer_CacheMode() <= 0) || !FileExists(m_ptable->m_filename))
+   if (!m_ptable->IsOnDisk())
+      return;
+
+   const bool usesTextureCache = m_ptable->GetSettings().GetPlayer_CacheMode() > 0 || m_renderer->m_renderDevice->m_compressTextures;
+   const std::filesystem::path cacheDir = usesTextureCache ? g_app->m_fileLocator.GetTablePath(m_ptable, FileLocator::TableSubFolder::Cache, true) : std::filesystem::path();
+   if (!cacheDir.empty())
+   {
+      const auto now = std::chrono::system_clock::now().time_since_epoch();
+      std::ofstream(cacheDir / "last_played"sv) << std::chrono::duration_cast<std::chrono::seconds>(now).count();
+   }
+
+   if (m_ptable->GetSettings().GetPlayer_CacheMode() <= 0)
       return;
 
    // Age all entries, renew the ones drawn by the player, and drop the ones not drawn for 100 saves
@@ -1115,7 +1221,7 @@ void Player::ShutdownTableSession()
    {
       if (m_tableSessionStartTime != 0)
       {
-         m_tableSessionPlayTime += usec() - m_tableSessionStartTime;
+         m_tableSessionPlayTime += SDL_GetTicksNS() / 1000 - m_tableSessionStartTime;
          m_tableSessionStartTime = 0;
       }
       m_trackTableSessionStats = false;
@@ -1669,7 +1775,7 @@ void Player::SetPlayState(const bool isPlaying, const uint32_t delayBeforePauseM
       if (m_playing)
       {
          if (m_trackTableSessionStats)
-            m_tableSessionStartTime = usec();
+            m_tableSessionStartTime = SDL_GetTicksNS() / 1000;
          m_noTimeCorrect = true; // Disable physics engine time correction on next physic update
          UnpauseMusic();
          PLOGI << "Unpausing Game";
@@ -1680,7 +1786,7 @@ void Player::SetPlayState(const bool isPlaying, const uint32_t delayBeforePauseM
       {
          if (m_tableSessionStartTime != 0)
          {
-            m_tableSessionPlayTime += usec() - m_tableSessionStartTime;
+            m_tableSessionPlayTime += SDL_GetTicksNS() / 1000 - m_tableSessionStartTime;
             m_tableSessionStartTime = 0;
          }
          PauseMusic();
@@ -1855,8 +1961,8 @@ string Player::GetPerfInfo()
 {
    // Make it more or less readable by updating only once per second
    static string txt;
-   static uint32_t lastUpdate = 0;
-   const uint32_t now = msec();
+   static uint64_t lastUpdate = 0;
+   const uint64_t now = SDL_GetTicks();
    if (lastUpdate != 0 && now - lastUpdate < 1000)
       return txt;
 
@@ -1879,6 +1985,10 @@ string Player::GetPerfInfo()
    info << "State changes: " << m_renderer->m_renderDevice->Perf_GetNumStateChanges() << '\n';
    info << "Texture changes: " << m_renderer->m_renderDevice->Perf_GetNumTextureChanges() << " (" << m_renderer->m_renderDevice->Perf_GetNumTextureUploads() << " Uploads)\n";
    info << "Shader/Parameter changes: " << m_renderer->m_renderDevice->Perf_GetNumTechniqueChanges() << " / " << m_renderer->m_renderDevice->Perf_GetNumParameterChanges() << '\n';
+#if defined(ENABLE_BGFX)
+   info << "Uniform cache hits/uploads: " << m_renderer->m_renderDevice->Perf_GetUniformCacheFastHits() << '+' << m_renderer->m_renderDevice->Perf_GetUniformCacheShadowHits() << " / "
+        << m_renderer->m_renderDevice->Perf_GetUniformCacheUploads() << " (" << (m_renderer->m_renderDevice->Perf_GetUniformCacheSkippedBytes() + 1023) / 1024 << "kB skipped)\n";
+#endif
    info << "Objects: " << static_cast<unsigned int>(m_ptable->GetParts().size()) << '\n';
    info << '\n';
 
@@ -1971,7 +2081,7 @@ void Player::ProcessOSMessages(const bool isInitialized)
    if (std::this_thread::get_id() != m_osThreadId)
       return;
 
-   const uint64_t startTick = usec();
+   const uint64_t startTick = SDL_GetTicksNS() / 1000;
    SDL_Event e;
    bool isPFWnd = true;
    static Vertex2D dragStart;
@@ -2101,7 +2211,7 @@ void Player::ProcessOSMessages(const bool isInitialized)
       m_pininput.HandleSDLEvent(e);
 
       // Limit to 1ms of OS message processing per call
-      if ((usec() - startTick) > 1000ull)
+      if ((SDL_GetTicksNS() / 1000 - startTick) > 1000ull)
          break;
    }
 
@@ -2157,14 +2267,14 @@ public:
          m_player->FireTimers(-2);
          m_player->m_physics->UpdatePhysics(m_captureTime);
          m_player->m_pluginManager.ProcessAsyncCallbacks();
-         m_captureStartupEndTime = usec();
+         m_captureStartupEndTime = SDL_GetTicksNS() / 1000;
          m_captureStartupEndPhysicsTime = m_player->m_physics->GetCurrentTime();
       }
 
       // Run 1s of normal emulation to stabilize
       if (m_player->m_physics->GetCurrentTime() < m_captureStartupEndPhysicsTime + 1000000)
       {
-         m_captureTime = m_captureStartupEndPhysicsTime + usec() - m_captureStartupEndTime;
+         m_captureTime = m_captureStartupEndPhysicsTime + SDL_GetTicksNS() / 1000 - m_captureStartupEndTime;
       }
 
       // Stepped emulation & rendering at the capture frequency
@@ -2330,9 +2440,9 @@ private:
    int m_captureFrameNumber = 1;
    bool m_captureRequested = false;
 
-   uint64_t m_captureTime = usec();
-   uint64_t m_captureStartupEndTime = usec();
-   uint64_t m_captureStartupEndPhysicsTime = usec();
+   uint64_t m_captureTime = SDL_GetTicksNS() / 1000;
+   uint64_t m_captureStartupEndTime = SDL_GetTicksNS() / 1000;
+   uint64_t m_captureStartupEndPhysicsTime = SDL_GetTicksNS() / 1000;
 
    int m_nLights;
    vector<vector<float>> m_lightStates;
@@ -2371,7 +2481,7 @@ void Player::UpdateGameLogic()
          // Catching it up would make PinMAME (time fenced on game time by core.vbs) race forward, and the audio produced meanwhile would add the stall
          // to the audio latency for the rest of the session. Shorter lags (slow frames, long script calls) are fully simulated
          constexpr uint64_t maxCatchUp = 100000; // [us]
-         const uint64_t now = usec();
+         const uint64_t now = SDL_GetTicksNS() / 1000;
          if (m_physics->IsStarted() && now > m_physics->GetCurrentTime() + maxCatchUp)
             m_physics->SkipTime(now - (m_physics->GetCurrentTime() + maxCatchUp));
          m_physics->UpdatePhysics(now); // Update physics (also triggering events, syncing with controller)
@@ -2464,7 +2574,7 @@ void Player::MultithreadedGameLoop()
 #else
          // Sadly waiting is very imprecise (at least on Windows) and we suffer a bit from it.
          // On Windows 10/11 experiments show a minimum delay around 300-500us (half a ms) leading to an overall latency around 2ms
-         uOverSleep(100000);
+         SDL_DelayNS(100000);
 #endif
          // The other option would be to use spin wait to achieve sub ms overall latency but this is too CPU intensive:
          // YieldProcessor();
@@ -2475,7 +2585,7 @@ void Player::MultithreadedGameLoop()
    // Flush any pending frame
    {
       while (m_renderer->m_renderDevice->m_framePending || !m_renderer->m_renderDevice->m_frameMutex.try_lock())
-         uOverSleep(100000);
+         SDL_DelayNS(100000);
       FinishFrame();
       m_renderer->m_renderDevice->m_frameMutex.unlock();
    }
@@ -2521,7 +2631,7 @@ void Player::GPUQueueStuffingGameLoop()
       // Adjust framerate if requested by user (i.e. not using a synchronization mode that will lead to blocking calls aligned to the display refresh rate)
       if (m_videoSyncMode == VideoSyncMode::VSM_NONE || m_maxFramerate < m_playfieldWnd->GetRefreshRate()) // The synchronization is not already performed by VSYNC
       {
-         const int timeForFrame = static_cast<int>(usec() - m_startFrameTick);
+         const int timeForFrame = static_cast<int>(SDL_GetTicksNS() / 1000 - m_startFrameTick);
          const int targetTime = static_cast<int>(1000000. / (double)m_maxFramerate);
          if (timeForFrame < targetTime)
          {
@@ -2588,12 +2698,12 @@ void Player::FramePacingGameLoop()
 
       UpdateGameLogic();
 
-      PLOGI_IF(debugLog) << "Frame Collect [Last frame length: " << ((double)m_renderProfiler->GetPrev(FrameProfiler::PROFILE_FRAME) / 1000.0) << "ms] at " << usec();
+      PLOGI_IF(debugLog) << "Frame Collect [Last frame length: " << ((double)m_renderProfiler->GetPrev(FrameProfiler::PROFILE_FRAME) / 1000.0) << "ms] at " << SDL_GetTicksNS() / 1000;
       PrepareFrame();
 
       UpdateGameLogic();
 
-      PLOGI_IF(debugLog) << "Frame Submit at " << usec();
+      PLOGI_IF(debugLog) << "Frame Submit at " << SDL_GetTicksNS() / 1000;
       SubmitFrame();
       m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_SLEEP);
 
@@ -2608,7 +2718,7 @@ void Player::FramePacingGameLoop()
       // If the user asked to sync on a lower frame rate than the refresh rate, then wait for it
       if (m_maxFramerate != m_playfieldWnd->GetRefreshRate())
       {
-         const uint64_t now = usec();
+         const uint64_t now = SDL_GetTicksNS() / 1000;
          const unsigned int refreshLength = static_cast<unsigned int>(1000000. / (double)m_playfieldWnd->GetRefreshRate());
          const unsigned int minimumFrameLength = static_cast<unsigned int>(1000000. / (double)m_maxFramerate);
          const unsigned int maximumFrameLength = 5 * refreshLength;
@@ -2627,7 +2737,7 @@ void Player::FramePacingGameLoop()
       #endif
       m_lastFrameSyncOnVBlank = m_curFrameSyncOnVBlank;
       m_lastFrameSyncOnFPS = m_curFrameSyncOnFPS;
-      PLOGI_IF(debugLog) << "Frame Scheduled at " << usec() << ", Waited for VBlank: " << m_curFrameSyncOnVBlank << ", Waited for FPS: " << m_curFrameSyncOnFPS;
+      PLOGI_IF(debugLog) << "Frame Scheduled at " << SDL_GetTicksNS() / 1000 << ", Waited for VBlank: " << m_curFrameSyncOnVBlank << ", Waited for FPS: " << m_curFrameSyncOnFPS;
       m_renderer->m_renderDevice->m_vsyncCount = 0;
       m_renderProfiler->ExitProfileSection(); // Out of Sleep section
       m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_FLIP);
@@ -2657,7 +2767,7 @@ void Player::PrepareFrame()
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights
-   m_startFrameTick = usec();
+   m_startFrameTick = SDL_GetTicksNS() / 1000;
 
    m_pluginAPI.BroadcastVPXMsg(m_onPrepareFrameMsgId, nullptr);
 

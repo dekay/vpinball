@@ -4,6 +4,7 @@
 
 #include "InGameUIRenderer.h"
 #include "InGameUIPane.h"
+#include "InGameUIWidgets.h"
 #include "imgui/imgui.h"
 
 class Player;
@@ -23,13 +24,18 @@ namespace VPX::InGameUI
 // with each item's control stacked under its label, and portrait cabinet renders
 // the whole UI as a 16:11 inset "display" in the lower half of the frame. On
 // narrow frames the tab bar splits in two lines and the left rail folds to an
-// icon column, deploying over the item pane when hovered or navigated to.
-class InGameUIDesktopRenderer final : public InGameUIRenderer
+// icon column, deploying over the item pane when hovered or navigated to. On
+// very wide frames the chrome is capped to a centered column, the frame showing
+// through dimmed side bands.
+// The class is meant to be extended by host-provided chromes (the mini frontend
+// reuses it with its own top bar tabs over the table catalog base view).
+class InGameUIDesktopRenderer : public InGameUIRenderer
 {
 public:
    explicit InGameUIDesktopRenderer(InGameUI& owner);
 
    void RenderPages(const vector<InGameUIPage*>& pages, float elapsedS) override;
+   void OnUIOpened() override;
 
    bool OnUINavigatePrev(InGameUIPage* page) override;
    bool OnUINavigateNext(InGameUIPage* page) override;
@@ -37,16 +43,31 @@ public:
    bool OnUIReleaseAdjust(InGameUIPage* page) override;
    bool OnUINavigateBack(InGameUIPage* page) override;
 
-private:
-   bool NavStep(InGameUIPage* page, int direction);
-   void EngageNav(InGameUIPage* page, int direction);
-   bool IsItemNavFocusable(const InGameUIPage& page, int index) const;
-   bool HasNavFocusableItem(const InGameUIPage& page) const;
-   void EnsureNavSelection(InGameUIPage& page, int direction);
-   void RenderContentPage(InGameUIPage& page, const vector<InGameUIPane>& panes, bool isNavSource, const string& pagePath);
-   void RenderFooterActions(InGameUIPage& page);
-   void RenderItems(InGameUIPage& page, const vector<InGameUIPane>& panes, bool isNavSource);
-   bool NavRow(const char* icon, const char* label, bool selected, const char* id, const std::shared_ptr<Sampler>& iconImage, bool focused);
+protected:
+   // The top bar's tabs, in left-to-right order (right-justified ones laid out
+   // from the right edge, rightmost first): the same order drives flipper
+   // navigation. Category tabs navigate to the group's first navigation entry;
+   // action tabs run a callback instead (GAME hides the UI, QUIT closes).
+   // firstPathOf(group) resolves a group's first entry path, "" when unknown.
+   virtual void BuildTopTabs(vector<DesktopTopTab>& tabs, const string& rootPath, const std::function<string(const string&)>& firstPathOf);
+
+   // The top-level category a page path belongs to: the first path segment by
+   // default ("settings/audio" -> "settings"); host chromes may remap pages to
+   // an existing category (the frontend's "frontend/table" is its Table section)
+   virtual string NavGroup(const string& path) const;
+
+   // The top-level category (first path segment) the navigation root page
+   // belongs to ("table": the homepage doubles as the table's own section)
+   virtual string NavRootGroup(const string& rootPath) const;
+
+   // The label of the rail row pinned at the top of a group's sub-pages,
+   // navigating back to the navigation root ("Table Info" for the table
+   // category); nullptr = the group has no navigation root row
+   virtual const char* NavRootRailLabel(const string& group) const;
+
+   // The title the navigation root page's content is displayed under ("Table
+   // Info": the homepage doubles as the table info view); nullptr = its own title
+   virtual const char* NavRootPageTitle() const;
 
    InGameUI& m_inGameUI;
    Player* const m_player;
@@ -57,9 +78,23 @@ private:
       string label;
       string path;
    };
+   string m_selectedGroup; // First path segment of the selected category (the root page belongs to its NavRootGroup)
+
+private:
+   bool NavStep(InGameUIPage* page, int direction);
+   void EngageNav(InGameUIPage* page, int direction);
+   bool IsNavSource(const InGameUIPage& page) const;
+   bool IsItemNavFocusable(const InGameUIPage& page, int index) const;
+   bool HasNavFocusableItem(const InGameUIPage& page) const;
+   void EnsureNavSelection(InGameUIPage& page, int direction);
+   void RenderContentPage(InGameUIPage& page, const vector<InGameUIPane>& panes, bool isNavSource, const string& pagePath);
+   void RenderFooterActions(InGameUIPage& page);
+   void RenderItems(InGameUIPage& page, const vector<InGameUIPane>& panes, bool isNavSource);
+   bool NavRow(const char* icon, const char* label, bool selected, const char* id, const std::shared_ptr<Sampler>& iconImage, bool focused);
+   bool WizardNavRow(int step, int activeStep, int stepCount, const char* label, bool focused);
+
    vector<NavEntry> m_navEntries; // Cached root page navigation items
    vector<NavEntry> m_pluginEntries; // Cached plugins homepage items (one per plugin)
-   string m_selectedGroup; // First path segment of the selected category (the root page belongs to "table")
    std::shared_ptr<Sampler> m_plungerIcon; // Lazy-loaded editor plunger icon for the rail
    bool m_plungerLoadFailed = false;
 
@@ -89,7 +124,10 @@ private:
    bool m_isDraggingScroll = false;
    ImGuiID m_dragScrollPaneId = 0; // Pane that owns the current drag gesture
    ImVec2 m_dragScrollStartPos { 0.f, 0.f };
+   float m_dragScrollStartScrollY = 0.f; // Pane scroll offset when the drag was armed
    float m_dragScrollVelocity = 0.f; // px/s, for the inertial glide after release
+   static bool IsWidgetActive();
+   ImGuiID m_dragPassThroughId = 0; // Last pressed whole-row button: a drag-scroll may start on it (the press is cancelled once the pane really scrolls)
    string m_lastNavPath; // Navigation path as of the last rendered frame (level resets on change)
    struct TabNav
    {
@@ -103,6 +141,7 @@ private:
       bool isBack;
       string label;
       string path;
+      std::function<void()> activate;
    };
    vector<RailNav> m_navRailRows; // Rail rows top to bottom (back row first), rebuilt each frame
 };

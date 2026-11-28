@@ -67,6 +67,9 @@
     <Filter Include="ui\live\editor\ops">
       <UniqueIdentifier>{7B4E9A21-3C5D-4E8F-A6B2-9D1F0C5E7A83}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ui\live\frontend">
+      <UniqueIdentifier>{87193B12-0BF6-4254-A162-E35A09D8793F}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ui\live\ingame">
       <UniqueIdentifier>{6DF89AE6-299E-4F7E-A729-9188AD1D98F1}</UniqueIdentifier>
     </Filter>
@@ -259,6 +262,9 @@
       <Filter>core</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/core/TableAudit.cpp">
+      <Filter>core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/core/TableCatalog.cpp">
       <Filter>core</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/core/TableDB.cpp">
@@ -699,6 +705,18 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/ViewportSidebar.cpp">
       <Filter>ui\live\editor</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendDesktopRenderer.cpp">
+      <Filter>ui\live\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendMedia.cpp">
+      <Filter>ui\live\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendUI.cpp">
+      <Filter>ui\live\frontend</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendTheme.cpp">
+      <Filter>ui\live\frontend</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/InGameUI.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
@@ -711,10 +729,28 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/CabinetSettingsPage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/DeviceLayouts.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/DisplayProfileSettingsPage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/DisplaySettingsPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendHomePage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendMediaManagerPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendSettingsPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendTableInfoPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendTablePage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/GraphicSettingsPage.cpp">
@@ -774,6 +810,12 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/PointOfViewSettingsPage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/StartupWizardModel.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/StartupWizardPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/StereoSettingsPage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
@@ -787,6 +829,9 @@
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/TableRulesPage.cpp">
+      <Filter>ui\live\ingame</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/TouchDevicePage.cpp">
       <Filter>ui\live\ingame</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/VRSettingsPage.cpp">
@@ -1332,6 +1377,9 @@
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/core/TableAudit.h">
+      <Filter>core</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/core/TableCatalog.h">
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/core/TableDB.h">
@@ -1913,6 +1961,18 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/ViewportSidebar.h">
       <Filter>ui\live\editor</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendDesktopRenderer.h">
+      <Filter>ui\live\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendMedia.h">
+      <Filter>ui\live\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendUI.h">
+      <Filter>ui\live\frontend</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/frontend/FrontendTheme.h">
+      <Filter>ui\live\frontend</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/InGameUI.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
@@ -1925,10 +1985,28 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/CabinetSettingsPage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/DeviceLayouts.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/DisplayProfileSettingsPage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/DisplaySettingsPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendHomePage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendMediaManagerPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendSettingsPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendTableInfoPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/FrontendTablePage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/GraphicSettingsPage.h">
@@ -1997,6 +2075,12 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/SensorSetupPage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/StartupWizardModel.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/StartupWizardPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/StereoSettingsPage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
@@ -2007,6 +2091,9 @@
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/TableRulesPage.h">
+      <Filter>ui\live\ingame</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/TouchDevicePage.h">
       <Filter>ui\live\ingame</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/VRSettingsPage.h">
@@ -2928,67 +3015,67 @@
     <Image Include="$(SolutionDir)/../../src/assets/bumperskirt.webp">
       <Filter>assets</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/ball.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/ball.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/bumper.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/bumper.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/decal.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/decal.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/flasher.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/flasher.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/flipper.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/flipper.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/gate.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/gate.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/kicker.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/kicker.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/light.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/light.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/lightseq.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/lightseq.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/plunger.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/plunger.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/primitive.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/primitive.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/ramp.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/ramp.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/reel.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/reel.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/refimage.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/refimage.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/rubber.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/rubber.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/spinner.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/spinner.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/target.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/target.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/textbox.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/textbox.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/timer.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/timer.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/trigger.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/trigger.webp">
       <Filter>assets\editor</Filter>
     </Image>
-    <Image Include="$(SolutionDir)/../../src/assets/editor/wall.png">
+    <Image Include="$(SolutionDir)/../../src/assets/editor/wall.webp">
       <Filter>assets\editor</Filter>
     </Image>
     <Image Include="$(SolutionDir)/../../src/assets/envmap.webp">
@@ -3405,9 +3492,6 @@
       <Filter>ui\win\res</Filter>
     </Image>
     <Image Include="$(SolutionDir)/../../src/ui/win/res/camera.ico">
-      <Filter>ui\win\res</Filter>
-    </Image>
-    <Image Include="$(SolutionDir)/../../src/ui/win/res/PlayWarning.bmp">
       <Filter>ui\win\res</Filter>
     </Image>
   </ItemGroup>

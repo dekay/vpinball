@@ -9,8 +9,14 @@
 #include "CabinetSettingsPage.h"
 #include "DisplayProfileSettingsPage.h"
 #include "DisplaySettingsPage.h"
+#include "FrontendHomePage.h"
+#include "FrontendMediaManagerPage.h"
+#include "FrontendSettingsPage.h"
+#include "FrontendTableInfoPage.h"
+#include "FrontendTablePage.h"
 #include "GraphicSettingsPage.h"
 #include "HomePage.h"
+#include "InGameUIDesktopRenderer.h"
 #include "InputProfilePage.h"
 #include "InputSettingsPage.h"
 #include "LoadingPage.h"
@@ -20,6 +26,7 @@
 #include "PluginSettingsPage.h"
 #include "PlungerSettingsPage.h"
 #include "PointOfViewSettingsPage.h"
+#include "StartupWizardPage.h"
 #include "StereoSettingsPage.h"
 #include "TableMiscPage.h"
 #include "TableOptionsPage.h"
@@ -36,8 +43,14 @@ InGameUI::InGameUI(LiveUI &liveUI)
    : m_player(g_pplayer)
    , m_renderer(InGameUIRenderer::Create(*this))
 {
+   AddPage("frontend/home"s, []() { return std::make_unique<FrontendHomePage>(); });
+   AddPage("frontend/table"s, []() { return std::make_unique<FrontendTablePage>(); });
+   AddPage("table/info"s, []() { return std::make_unique<FrontendTableInfoPage>(); });
+   AddPage("table/media"s, []() { return std::make_unique<FrontendMediaManagerPage>(); });
+   AddPage("settings/frontend"s, []() { return std::make_unique<FrontendSettingsPage>(); });
    AddPage("homepage"s, []() { return std::make_unique<HomePage>(); });
-   AddPage("loading"s, []() { return std::make_unique<LoadingPage>(); });
+   AddPage("progress/loading"s, []() { return std::make_unique<LoadingPage>("LOADING"s); });
+   AddPage("progress/preparing"s, []() { return std::make_unique<LoadingPage>("PREPARING"s); });
    AddPage("settings/audio"s, []() { return std::make_unique<AudioSettingsPage>(); });
    AddPage("settings/cabinet"s, []() { return std::make_unique<CabinetSettingsPage>(); });
    AddPage("settings/display_profiles"s, []() { return std::make_unique<DisplayProfileSettingsPage>(); });
@@ -50,6 +63,7 @@ InGameUI::InGameUI(LiveUI &liveUI)
    AddPage("settings/plunger"s, []() { return std::make_unique<PlungerSettingsPage>(); });
    AddPage("settings/pov"s, []() { return std::make_unique<PointOfViewSettingsPage>(); });
    AddPage("settings/stereo"s, []() { return std::make_unique<StereoSettingsPage>(); });
+   AddPage("settings/startup_wizard"s, []() { return std::make_unique<StartupWizardPage>(); });
    AddPage("settings/vr"s, []() { return std::make_unique<VRSettingsPage>(); });
    AddPage("table/general"s, []() { return std::make_unique<TableMiscPage>(); });
    AddPage("table/options"s, []() { return std::make_unique<TableOptionsPage>(); });
@@ -57,6 +71,8 @@ InGameUI::InGameUI(LiveUI &liveUI)
    AddPage("plugins/homepage"s, []() { return std::make_unique<PluginHomePage>(); });
    AddPage("misc/systeminfo"s, []() { return std::make_unique<SystemInfoPage>(); });
 }
+
+bool InGameUI::UsesDesktopRenderer() const { return dynamic_cast<InGameUIDesktopRenderer *>(m_renderer.get()) != nullptr; }
 
 void InGameUI::AddPage(const string &path, const std::function<std::unique_ptr<InGameUIPage>()>& pageFactory)
 {
@@ -144,6 +160,7 @@ void InGameUI::Open(const string& page)
    assert(!IsOpened());
    Navigate(page);
    m_useFlipperNav = m_player->m_vrDevice || m_player->m_ptable->GetViewMode() == ViewSetupID::BG_FULLSCREEN;
+   m_renderer->OnUIOpened();
 }
 
 void InGameUI::Close()
@@ -151,6 +168,9 @@ void InGameUI::Close()
    m_navigationHistory.clear();
    if (GetActivePage())
       GetActivePage()->Close(false);
+   // Closing the loading page does not end a UI session: the startup owns the play state, and no option was edited
+   if (m_player->m_isLoading)
+      return;
    if (!m_player->IsPlaying(false))
       m_player->SetPlayState(true);
    m_player->m_ptable->FireOptionEvent(PinTable::OptionEventType::EndOfEdit);
@@ -158,11 +178,11 @@ void InGameUI::Close()
 
 void InGameUI::Update()
 {
-   const uint32_t now = msec();
-   float elapsed = static_cast<float>(now - m_lastRenderMs) / 1000.f;
+   const uint64_t now = SDL_GetTicksNS();
+   float elapsed = static_cast<float>(static_cast<double>(now - m_lastRenderNs) / 1000000000.);
    if (elapsed > 1.f)
       elapsed = 0.f;
-   m_lastRenderMs = now;
+   m_lastRenderNs = now;
    if (m_activePages.empty())
       return;
 
@@ -171,7 +191,9 @@ void InGameUI::Update()
    {
       for (auto it = m_activePages.begin(); it != m_activePages.end();)
       {
-         if ((*it)->IsClosed())
+         // A page closed before its first update (navigation straight after opening it) is kept
+         // one more frame: the renderer needs one render to cache its items (sections, plugins)
+         if ((*it)->IsClosed() && (*it)->WasUpdated())
          {
             if (it->get() == m_rootPage)
                m_rootPage = nullptr; // Do not keep a dangling pointer to the erased instance
@@ -210,7 +232,6 @@ void InGameUI::Update()
       }
 
       HandlePageInput();
-      HandleLegacyFlyOver();
    }
 
    // Copy list as it may be modified when the page is updated (for example when a navigation event is triggered)
@@ -231,7 +252,7 @@ void InGameUI::OnUIUpAction()
 
    const bool wasFlipperNav = m_useFlipperNav;
    m_useFlipperNav = true;
-   m_flipperNavStart = msec();
+   m_flipperNavStart = SDL_GetTicks();
    m_flipperNavRepeatCount = 0;
    if (m_player->ShouldHideDesktopCursor())
       SDL_HideCursor();
@@ -249,7 +270,7 @@ void InGameUI::OnUIDownAction()
 
    const bool wasFlipperNav = m_useFlipperNav;
    m_useFlipperNav = true;
-   m_flipperNavStart = msec();
+   m_flipperNavStart = SDL_GetTicks();
    m_flipperNavRepeatCount = 0;
    if (m_player->ShouldHideDesktopCursor())
       SDL_HideCursor();
@@ -319,11 +340,11 @@ void InGameUI::OnUINavigateBack()
 
 void InGameUI::HandlePageInput()
 {
-   // Disable keyboard shortcut if no control editing is in progress
-   if (ImGui::IsAnyItemActive())
+   // Disable command input while a control or the input-mapping capture owns input
+   if (ImGui::IsAnyItemActive() || m_player->m_pininput.IsButtonCaptureActive())
       return;
 
-   // If user has moved the mouse, disable flipper navigation
+   // If user has moved the mouse, disable command/focus navigation
    if (m_useFlipperNav && !m_player->m_vrDevice)
    {
       ImVec2 delta = m_prevMousePos - ImGui::GetMousePos();
@@ -331,27 +352,31 @@ void InGameUI::HandlePageInput()
    }
    m_prevMousePos = ImGui::GetMousePos();
 
+   InputManager &input = m_player->m_pininput;
+
    // While a VR controller points at a scrollable pane, pointer gestures
-   // (wheel/drag) own its scroll position: drop flipper navigation so the
+   // (wheel/drag) own its scroll position: drop focus navigation so the
    // keep-focus-visible scrolling doesn't fight them (causing a flicker)
-   if (m_useFlipperNav && m_player->m_pininput.IsUIPointerScrollingActive())
+   if (m_useFlipperNav && input.IsUIPointerScrollingActive())
       m_useFlipperNav = false;
 
-   // Allow pages to force flipper navigation (needed by anaglyph calibration)
+   // Allow pages to force focus navigation (needed by anaglyph calibration)
    for (const auto &page : m_activePages)
       m_useFlipperNav |= page->IsFlipperNavNeeded();
 
    // Handle continuous press navigation
-   const uint32_t now = msec();
+   const uint64_t now = SDL_GetTicks();
    const uint32_t flipperNavRepeat = m_flipperNavRepeatCount == 0 ? 500 : m_flipperNavRepeatCount == 1 ? 250 : 125;
-   if (m_useFlipperNav && m_player->m_pininput.IsPressed(m_player->m_pininput.GetUIUpActionId()) && (now - m_flipperNavStart) > flipperNavRepeat)
+   const bool prevPressed = input.IsPressed(input.GetUIUpActionId()) || input.IsPressed(input.GetLeftMagnaActionId());
+   const bool nextPressed = input.IsPressed(input.GetUIDownActionId()) || input.IsPressed(input.GetRightMagnaActionId());
+   if (m_useFlipperNav && prevPressed && (now - m_flipperNavStart) > flipperNavRepeat)
    {
       m_flipperNavStart = now;
       m_flipperNavRepeatCount++;
       if (!m_renderer->OnUINavigatePrev(GetActivePage()))
          GetActivePage()->SelectPrevItem();
    }
-   else if (m_useFlipperNav && m_player->m_pininput.IsPressed(m_player->m_pininput.GetUIDownActionId()) && (now - m_flipperNavStart) > flipperNavRepeat)
+   else if (m_useFlipperNav && nextPressed && (now - m_flipperNavStart) > flipperNavRepeat)
    {
       m_flipperNavStart = now;
       m_flipperNavRepeatCount++;
@@ -360,8 +385,8 @@ void InGameUI::HandlePageInput()
    }
 
    // Handle continuous press item adjustment, applying remaining adjustment on release
-   const bool leftPressed = m_useFlipperNav && m_player->m_pininput.IsPressed(m_player->m_pininput.GetUILeftActionId());
-   const bool rightPressed = m_useFlipperNav && m_player->m_pininput.IsPressed(m_player->m_pininput.GetUIRightActionId());
+   const bool leftPressed = m_useFlipperNav && (input.IsPressed(input.GetUILeftActionId()) || input.IsPressed(input.GetLeftFlipperActionId()));
+   const bool rightPressed = m_useFlipperNav && (input.IsPressed(input.GetUIRightActionId()) || input.IsPressed(input.GetRightFlipperActionId()));
    if (leftPressed)
    {
       if (!m_renderer->OnUIAdjust(GetActivePage(), -1.f, false))
@@ -378,77 +403,6 @@ void InGameUI::HandlePageInput()
          GetActivePage()->ReleaseAdjustedItem();
    }
    m_itemAdjustWasPressed = leftPressed || rightPressed;
-}
-
-// Legacy keyboard fly camera when in ingame option
-// FIXME Remove
-void InGameUI::HandleLegacyFlyOver()
-{
-   if (!g_settingsService.GetActiveSettings().GetPlayer_EnableCameraModeFlyAround())
-      return;
-
-   bool moved = false;
-   if (!ImGui::IsKeyDown(ImGuiKey_LeftAlt) && !ImGui::IsKeyDown(ImGuiKey_RightAlt))
-   {
-      if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))
-      {
-         m_player->m_renderer->m_cam.x += 10.0f;
-         moved = true;
-      }
-      if (ImGui::IsKeyDown(ImGuiKey_RightArrow))
-      {
-         m_player->m_renderer->m_cam.x -= 10.0f;
-         moved = true;
-      }
-      if (ImGui::IsKeyDown(ImGuiKey_UpArrow))
-      {
-         m_player->m_renderer->m_cam.y += 10.0f;
-         moved = true;
-      }
-      if (ImGui::IsKeyDown(ImGuiKey_DownArrow))
-      {
-         m_player->m_renderer->m_cam.y -= 10.0f;
-         moved = true;
-      }
-   }
-   else
-   {
-      if (ImGui::IsKeyDown(ImGuiKey_UpArrow))
-      {
-         m_player->m_renderer->m_cam.z += 10.0f;
-         moved = true;
-      }
-      if (ImGui::IsKeyDown(ImGuiKey_DownArrow))
-      {
-         m_player->m_renderer->m_cam.z -= 10.0f;
-         moved = true;
-      }
-      if (ImGui::IsKeyDown(ImGuiKey_LeftArrow))
-      {
-         m_player->m_renderer->m_inc += 0.01f;
-         moved = true;
-      }
-      if (ImGui::IsKeyDown(ImGuiKey_RightArrow))
-      {
-         m_player->m_renderer->m_inc -= 0.01f;
-         moved = true;
-      }
-   }
-
-   if (m_player->m_pininput.IsPressed(m_player->m_pininput.GetLeftNudgeActionId()))
-   {
-      m_player->m_ptable->GetViewSetup().mViewportRotation -= 1.0f;
-      moved = true;
-   }
-
-   if (m_player->m_pininput.IsPressed(m_player->m_pininput.GetRightNudgeActionId()))
-   {
-      m_player->m_ptable->GetViewSetup().mViewportRotation += 1.0f;
-      moved = true;
-   }
-
-   if (moved)
-      m_player->m_renderer->InvalidateLayout();
 }
 
 bool InGameUI::ProposeInputLayout(const string& deviceName, const std::function<void(bool, bool)>& handler)

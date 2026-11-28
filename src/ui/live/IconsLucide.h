@@ -29,9 +29,11 @@
 #define ICON_LC_EXTERNAL_LINK "\xee\x82\xb9" // U+E0B9
 #define ICON_LC_FILE "\xee\x83\x80" // U+E0C0
 #define ICON_LC_FILE_PLUS "\xee\x83\x89" // U+E0C9
+#define ICON_LC_FILM "\xee\x83\x90" // U+E0D0
 #define ICON_LC_FILTER "\xee\x83\x9c" // U+E0DC
 #define ICON_LC_FOLDER "\xee\x83\x97" // U+E0D7
 #define ICON_LC_FOLDER_OPEN "\xee\x89\x87" // U+E247
+#define ICON_LC_GALLERY_HORIZONTAL_END "\xee\x93\x8f" // U+E4CF
 #define ICON_LC_GAMEPAD_2 "\xee\x83\x9f" // U+E0DF
 #define ICON_LC_GLOBE "\xee\x83\xa8" // U+E0E8
 #define ICON_LC_HEART "\xee\x83\xb2" // U+E0F2

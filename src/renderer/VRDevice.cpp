@@ -10,6 +10,7 @@
 #include "parts/primitive.h"
 #include "renderer/MeshBuffer.h"
 #include "renderer/IndexBuffer.h"
+#include "renderer/Renderer.h"
 #include "renderer/RenderTarget.h"
 #include "renderer/Sampler.h"
 #include "renderer/VertexBuffer.h"
@@ -581,18 +582,11 @@ void VRDevice::SetupHMD()
    assert(m_viewConfigurationViews[0].recommendedImageRectHeight == m_viewConfigurationViews[1].recommendedImageRectHeight);
    assert(m_viewConfigurationViews[0].recommendedSwapchainSampleCount == m_viewConfigurationViews[1].recommendedSwapchainSampleCount);
 
-   // Let the user choose the down/super sampling
-   const float resFactor = g_pplayer ? g_settingsService.GetActiveSettings().GetPlayerVR_ResFactor() : -1.f;
-   if (resFactor <= 0.1f || resFactor > 10.f)
-   {
-      m_eyeWidth = m_viewConfigurationViews[0].recommendedImageRectWidth;
-      m_eyeHeight = m_viewConfigurationViews[0].recommendedImageRectHeight;
-   }
-   else
-   {
-      m_eyeWidth = static_cast<unsigned int>((float)m_viewConfigurationViews[0].recommendedImageRectWidth * resFactor);
-      m_eyeHeight = static_cast<unsigned int>((float)m_viewConfigurationViews[0].recommendedImageRectHeight * resFactor);
-   }
+   // The swapchain is always created at the runtime recommended resolution: super/down sampling is performed
+   // internally through the full scene anti aliasing factor (scaling the render buffers), with the final image
+   // resolved to the swapchain under VPX control instead of being resampled by the OpenXR compositor
+   m_eyeWidth = m_viewConfigurationViews[0].recommendedImageRectWidth;
+   m_eyeHeight = m_viewConfigurationViews[0].recommendedImageRectHeight;
 
    // Limit to OpenXR declared limits
    const uint32_t maxWidth = std::min(m_viewConfigurationViews[0].maxImageRectWidth, m_systemProperties.graphicsProperties.maxSwapchainImageWidth);
@@ -802,44 +796,11 @@ void VRDevice::CreateSession()
    }
    m_swapchainRenderTargets.resize(m_colorSwapchainInfo.imageViews.size() * m_depthSwapchainInfo.imageViews.size());
 
-   // Create a dedicated mono swapchain for the LiveUI, submitted as a view-locked quad composition layer. This avoids
-   // the compositor reprojection shaking the (head-locked) UI, as well as the fake stereo offset that made it unfocusable.
-   if (m_viewSpace != XR_NULL_HANDLE)
-   {
-      m_uiSwapchainInfo.backendFormat = m_backend->SelectColorSwapchainFormat(formats);
-      // 16:9 surface matching the desktop UI layout (the quad layer keeps the
-      // same ratio), sized from the eye resolution for text sharpness
-      m_uiSwapchainInfo.width = std::clamp(m_eyeWidth, 1280u, 2560u);
-      m_uiSwapchainInfo.height = m_uiSwapchainInfo.width * 9u / 16u;
-      m_uiSwapchainInfo.arraySize = 1;
-
-      XrSwapchainCreateInfo swapchainCreateInfo { XR_TYPE_SWAPCHAIN_CREATE_INFO };
-      swapchainCreateInfo.arraySize = 1;
-      swapchainCreateInfo.format = m_uiSwapchainInfo.backendFormat;
-      swapchainCreateInfo.width = m_uiSwapchainInfo.width;
-      swapchainCreateInfo.height = m_uiSwapchainInfo.height;
-      swapchainCreateInfo.mipCount = 1;
-      swapchainCreateInfo.faceCount = 1;
-      swapchainCreateInfo.sampleCount = 1;
-      swapchainCreateInfo.createFlags = 0;
-      swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-      OPENXR_CHECK(xrCreateSwapchain(m_session, &swapchainCreateInfo, &m_uiSwapchainInfo.swapchain), "Failed to create UI Swapchain");
-      if (m_uiSwapchainInfo.swapchain != XR_NULL_HANDLE)
-      {
-         uint32_t swapchainImageCount;
-         OPENXR_CHECK(xrEnumerateSwapchainImages(m_uiSwapchainInfo.swapchain, 0, &swapchainImageCount, nullptr), "Failed to enumerate UI Swapchain Images.");
-         XrSwapchainImageBaseHeader* swapchainImages = m_backend->AllocateSwapchainImageData(m_uiSwapchainInfo.swapchain, SwapchainType::COLOR, swapchainImageCount);
-         OPENXR_CHECK(xrEnumerateSwapchainImages(m_uiSwapchainInfo.swapchain, swapchainImageCount, &swapchainImageCount, swapchainImages), "Failed to enumerate UI Swapchain Images.");
-         m_backend->CreateImageViews(m_uiSwapchainInfo);
-         m_uiRenderTargets.resize(m_uiSwapchainInfo.imageViews.size());
-         if (m_uiSwapchainInfo.imageViews.empty())
-         { // Image enumeration failed, release the swapchain and fallback to rendering the UI inside the projection layer
-            m_backend->FreeSwapchainImageData(m_uiSwapchainInfo.swapchain);
-            OPENXR_CHECK(xrDestroySwapchain(m_uiSwapchainInfo.swapchain), "Failed to destroy UI Swapchain");
-            m_uiSwapchainInfo.swapchain = XR_NULL_HANDLE;
-         }
-      }
-   }
+   // The LiveUI renders to a dedicated offscreen surface, drawn inside the scene as a world-space quad (created lazily
+   // in RenderFrame). 16:9 surface matching the desktop UI layout (the quad keeps the same ratio), sized from the eye
+   // resolution for text sharpness
+   m_uiSurfaceWidth = std::clamp(m_eyeWidth, 1280u, 2560u);
+   m_uiSurfaceHeight = m_uiSurfaceWidth * 9u / 16u;
 
    auto inputHandler = std::make_unique<XRInputHandler>(g_pplayer->m_pininput, m_xrInstance, m_session);
    XrAction leftPoseAction = inputHandler->GetAction("/user/hand/left/input/grip/pose");
@@ -888,39 +849,31 @@ void VRDevice::ReleaseSession()
 
    // Destroy the swapchian render targets, and color/depth image views
    m_swapchainRenderTargets.clear();
-   m_uiRenderTarget = nullptr;
-   m_uiRenderTargets.clear();
    for (const auto& imageView : m_colorSwapchainInfo.imageViews)
       bgfx::destroy(imageView);
    for (const auto& imageView : m_depthSwapchainInfo.imageViews)
       bgfx::destroy(imageView);
-   for (const auto& imageView : m_uiSwapchainInfo.imageViews)
-      bgfx::destroy(imageView);
 
    // Process BGFX resource destruction before XR resource destruction
    bgfx::frame(BGFX_FRAME_FLUSH);
+   if (g_pplayer->m_renderer && g_pplayer->m_renderer->m_renderDevice)
+      g_pplayer->m_renderer->m_renderDevice->InvalidateUniformCache();
 
    // Free the Swapchain Image Data.
    if (m_colorSwapchainInfo.swapchain)
       m_backend->FreeSwapchainImageData(m_colorSwapchainInfo.swapchain);
    if (m_depthSwapchainInfo.swapchain)
       m_backend->FreeSwapchainImageData(m_depthSwapchainInfo.swapchain);
-   if (m_uiSwapchainInfo.swapchain)
-      m_backend->FreeSwapchainImageData(m_uiSwapchainInfo.swapchain);
 
    // Destroy the swapchains.
    if (m_colorSwapchainInfo.swapchain)
       OPENXR_CHECK(xrDestroySwapchain(m_colorSwapchainInfo.swapchain), "Failed to destroy Color Swapchain");
    if (m_depthSwapchainInfo.swapchain)
       OPENXR_CHECK(xrDestroySwapchain(m_depthSwapchainInfo.swapchain), "Failed to destroy Depth Swapchain");
-   if (m_uiSwapchainInfo.swapchain)
-      OPENXR_CHECK(xrDestroySwapchain(m_uiSwapchainInfo.swapchain), "Failed to destroy UI Swapchain");
    m_colorSwapchainInfo.swapchain = XR_NULL_HANDLE;
    m_colorSwapchainInfo.imageViews.clear();
    m_depthSwapchainInfo.swapchain = XR_NULL_HANDLE;
    m_depthSwapchainInfo.imageViews.clear();
-   m_uiSwapchainInfo.swapchain = XR_NULL_HANDLE;
-   m_uiSwapchainInfo.imageViews.clear();
 
    DiscardVisibilityMask();
 }
@@ -1115,40 +1068,103 @@ void VRDevice::UpdateVisibilityMask(RenderDevice* rd)
    }
 }
 
-// Raycasts the controller aim poses against the view-locked UI quad layer and
-// fills m_uiPointer. Called on the render thread once the head pose is located;
-// the result is consumed on the logic thread for mouse emulation and for
-// rendering the pointer ray in the scene.
+// Resolves the pose of the UI quad (anchored in the tracking space while
+// interactive, head locked otherwise), converts its corners to scene
+// coordinates for in-scene rendering, and raycasts the controller aim poses
+// against it, filling m_uiPointer. Called on the render thread once the head
+// pose is located; the result is consumed on the logic thread for mouse
+// emulation and for rendering the pointer ray in the scene.
 void VRDevice::UpdateUIPointer(XrTime predictedDisplayTime, float vpuToWorldScale)
 {
-   m_uiPointer = {};
-   if (!m_showUILayer || m_viewSpace == XR_NULL_HANDLE || m_referenceSpace == XR_NULL_HANDLE || m_uiSwapchainInfo.swapchain == XR_NULL_HANDLE)
+   // Filled locally then published at once on every exit path: the logic thread reads them concurrently (GetUIPointer, GetUIQuadScene)
+   UIPointer pointer;
+   Vertex3Ds quadScene[4] {};
+   bool quadSceneValid = false;
+   struct Publish
+   {
+      VRDevice* device;
+      UIPointer& pointer;
+      const Vertex3Ds (&quadScene)[4];
+      const bool& quadSceneValid;
+      ~Publish()
+      {
+         const std::lock_guard lock(device->m_uiPointerMutex);
+         device->m_uiPointer = pointer;
+         for (int i = 0; i < 4; i++)
+            device->m_uiQuadScene[i] = quadScene[i];
+         device->m_uiQuadSceneValid = quadSceneValid;
+      }
+   } publish { this, pointer, quadScene, quadSceneValid };
+   if (!m_showUILayer || m_viewSpace == XR_NULL_HANDLE || m_referenceSpace == XR_NULL_HANDLE)
       return;
 
-   // The UI quad is anchored in the tracking space when it appears: placed in
-   // front of the user's head on first show, then room locked until hidden (a
-   // fixed surface is far easier to point at than a head-locked one)
-   if (!m_uiLayerPoseValid)
+   // Resolve where the quad would be if it was rigidly attached to the head: bottom edge in front and below the viewer,
+   // tilted around this edge so that its normal points toward the viewer, with a small additional backward tilt.
+   const auto locateHeadLockedQuadPose = [this, predictedDisplayTime](XrPosef& pose)
    {
       XrSpaceLocation headLocation { XR_TYPE_SPACE_LOCATION };
       if (xrLocateSpace(m_viewSpace, m_referenceSpace, predictedDisplayTime, &headLocation) != XR_SUCCESS
          || (headLocation.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
             != (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
-         return;
+         return false;
       const bx::Quaternion headRot { headLocation.pose.orientation.x, headLocation.pose.orientation.y, headLocation.pose.orientation.z, headLocation.pose.orientation.w };
       const bx::Vec3 headPos { headLocation.pose.position.x, headLocation.pose.position.y, headLocation.pose.position.z };
-      const bx::Vec3 quadOffset = bx::mul(bx::Vec3 { 0.f, -0.05f * kUILayerHeight, -kUILayerDistance }, headRot);
-      m_uiLayerPose.position = { headPos.x + quadOffset.x, headPos.y + quadOffset.y, headPos.z + quadOffset.z };
-      m_uiLayerPose.orientation = headLocation.pose.orientation;
-      m_uiLayerPoseValid = true;
+      const float halfHeight = 0.5f * kUILayerHeight;
+      const float eyeAngle = atan2f(kUILayerBottomDrop, kUILayerBottomDistance);
+      const float pivotSwingAngle = asinf(halfHeight / sqrtf(kUILayerBottomDistance * kUILayerBottomDistance + kUILayerBottomDrop * kUILayerBottomDrop));
+      const float tilt = eyeAngle - pivotSwingAngle + bx::toRad(kUILayerExtraTiltDeg);
+      const bx::Quaternion tiltRot = bx::rotateX(-tilt);
+      const bx::Vec3 centerOffset = bx::add(bx::Vec3 { 0.f, -kUILayerBottomDrop, -kUILayerBottomDistance }, bx::mul(bx::Vec3 { 0.f, halfHeight, 0.f }, tiltRot));
+      const bx::Vec3 quadOffset = bx::mul(centerOffset, headRot);
+      const bx::Quaternion quadRot = bx::mul(headRot, tiltRot);
+      pose.position = { headPos.x + quadOffset.x, headPos.y + quadOffset.y, headPos.z + quadOffset.z };
+      pose.orientation = { quadRot.x, quadRot.y, quadRot.z, quadRot.w };
+      return true;
+   };
+
+   // The UI quad is anchored in the tracking space when it becomes interactive: placed in
+   // front of the user's head on first show, then room locked until hidden (a
+   // fixed surface is far easier to point at than a head-locked one)
+   if (m_uiLayerInteractive && (m_uiLayerReanchor.exchange(false) || !m_uiLayerPoseValid))
+      m_uiLayerPoseValid = locateHeadLockedQuadPose(m_uiLayerPose);
+
+   // Resolve the quad pose in reference space: room locked from the anchored pose while
+   // interactive, head locked (a fixed offset in front of the view) otherwise
+   XrPosef quadPose;
+   if (m_uiLayerInteractive && m_uiLayerPoseValid)
+   {
+      quadPose = m_uiLayerPose;
+   }
+   else if (!locateHeadLockedQuadPose(quadPose))
+   {
+      return;
    }
 
-   // Quad frame in reference space, from the frozen layer pose (meters)
-   const bx::Quaternion quadRot { m_uiLayerPose.orientation.x, m_uiLayerPose.orientation.y, m_uiLayerPose.orientation.z, m_uiLayerPose.orientation.w };
-   const bx::Vec3 quadCenter { m_uiLayerPose.position.x, m_uiLayerPose.position.y, m_uiLayerPose.position.z };
+   // Quad frame in reference space (meters)
+   const bx::Quaternion quadRot { quadPose.orientation.x, quadPose.orientation.y, quadPose.orientation.z, quadPose.orientation.w };
+   const bx::Vec3 quadCenter { quadPose.position.x, quadPose.position.y, quadPose.position.z };
    const bx::Vec3 quadXAxis = bx::mul(bx::Vec3 { 1.f, 0.f, 0.f }, quadRot);
    const bx::Vec3 quadYAxis = bx::mul(bx::Vec3 { 0.f, 1.f, 0.f }, quadRot);
    const bx::Vec3 quadNormal = bx::mul(bx::Vec3 { 0.f, 0.f, 1.f }, quadRot);
+
+   // Quad corners in scene coordinates (VPU) for drawing the UI draw list inside
+   // the stereo projection: reference-space meters to scene units through the
+   // playfield space transform inverse (same mapping as the pointer ray below)
+   const SceneLayout::SpaceTransform& space = g_pplayer->m_ptable->GetSceneLayout().GetSpaceTransform(VPX::SpaceReference::Playfield);
+   const Matrix3D refToScene = Matrix3D::MatrixScale(1.f / vpuToWorldScale) * Matrix3D::MatrixInverse(space.m_transform);
+   const bx::Vec3 corners[4] = { //
+      bx::mad(quadXAxis, -0.5f * kUILayerWidth, bx::mad(quadYAxis, 0.5f * kUILayerHeight, quadCenter)), // Top left
+      bx::mad(quadXAxis, 0.5f * kUILayerWidth, bx::mad(quadYAxis, 0.5f * kUILayerHeight, quadCenter)), // Top right
+      bx::mad(quadXAxis, -0.5f * kUILayerWidth, bx::mad(quadYAxis, -0.5f * kUILayerHeight, quadCenter)), // Bottom left
+      bx::mad(quadXAxis, 0.5f * kUILayerWidth, bx::mad(quadYAxis, -0.5f * kUILayerHeight, quadCenter))
+   }; // Bottom right
+   for (int i = 0; i < 4; i++)
+      quadScene[i] = refToScene * Vertex3Ds(corners[i].x, corners[i].y, corners[i].z);
+   quadSceneValid = true;
+
+   // The pointer raycast only runs while the UI is interactive (InGame UI opened and anchored)
+   if (!m_uiLayerInteractive || !m_uiLayerPoseValid)
+      return;
 
    struct HandPointer
    {
@@ -1199,23 +1215,47 @@ void VRDevice::UpdateUIPointer(XrTime predictedDisplayTime, float vpuToWorldScal
       return;
 
    const HandPointer& p = hands[hand];
-   m_uiPointer.valid = true;
-   m_uiPointer.onQuad = p.onQuad;
-   m_uiPointer.origin[0] = p.pose.position.x;
-   m_uiPointer.origin[1] = p.pose.position.y;
-   m_uiPointer.origin[2] = p.pose.position.z;
-   memcpy(m_uiPointer.hit, p.hit, sizeof(p.hit));
-   m_uiPointer.u = p.u;
-   m_uiPointer.v = p.v;
+   pointer.valid = true;
+   pointer.onQuad = p.onQuad;
+   pointer.origin[0] = p.pose.position.x;
+   pointer.origin[1] = p.pose.position.y;
+   pointer.origin[2] = p.pose.position.z;
+   memcpy(pointer.hit, p.hit, sizeof(p.hit));
+   pointer.u = p.u;
+   pointer.v = p.v;
+   pointer.hand = hand;
 
+   // Click: the trigger click where the runtime binds it, else the analog trigger value (e.g. Oculus Touch has no
+   // trigger/click), else the select click (khr/simple_controller)
    if (m_xrInputHandler != nullptr)
-      if (const XrAction clickAction = m_xrInputHandler->GetAction(hand == 0 ? "/user/hand/right/input/trigger/click" : "/user/hand/left/input/trigger/click"); clickAction != XR_NULL_HANDLE)
+   {
+      const string handPath = hand == 0 ? "/user/hand/right/input/"s : "/user/hand/left/input/"s;
+      const auto getBool = [this, &handPath](const char* input, bool& value)
       {
-         const XrActionStateGetInfo getInfo { XR_TYPE_ACTION_STATE_GET_INFO, nullptr, clickAction };
+         const XrAction action = m_xrInputHandler->GetAction(handPath + input);
+         if (action == XR_NULL_HANDLE)
+            return false;
+         const XrActionStateGetInfo getInfo { XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action };
          XrActionStateBoolean state { XR_TYPE_ACTION_STATE_BOOLEAN };
-         if (xrGetActionStateBoolean(m_session, &getInfo, &state) == XR_SUCCESS && state.isActive)
-            m_uiPointer.click = state.currentState;
+         if (xrGetActionStateBoolean(m_session, &getInfo, &state) != XR_SUCCESS || !state.isActive)
+            return false;
+         value = state.currentState;
+         return true;
+      };
+      bool click = false;
+      if (!getBool("trigger/click", click))
+      {
+         const XrAction valueAction = m_xrInputHandler->GetAction(handPath + "trigger/value");
+         const XrActionStateGetInfo getInfo { XR_TYPE_ACTION_STATE_GET_INFO, nullptr, valueAction };
+         XrActionStateFloat state { XR_TYPE_ACTION_STATE_FLOAT };
+         if (valueAction != XR_NULL_HANDLE && xrGetActionStateFloat(m_session, &getInfo, &state) == XR_SUCCESS && state.isActive)
+            click = state.currentState > (m_uiPointerTriggerDown ? 0.35f : 0.55f); // Hysteresis against a flickering click
+         else
+            getBool("select/click", click);
       }
+      pointer.click = click;
+   }
+   m_uiPointerTriggerDown = pointer.click;
 
    // Convert the ray endpoints from reference-space meters to scene coordinates
    // (VPU) for world-space rendering: reference VPU -> camera view units -> scene
@@ -1224,8 +1264,6 @@ void VRDevice::UpdateUIPointer(XrTime predictedDisplayTime, float vpuToWorldScal
    // space transform applied to reference coordinates in VPU:
    //   refToScene = scale(1/vpuToWorldScale) * eyeView * scale(1/spaceScale) * inv(composeView)
    //            = scale(1/vpuToWorldScale) * inv(spaceTransform)
-   const SceneLayout::SpaceTransform& space = g_pplayer->m_ptable->GetSceneLayout().GetSpaceTransform(VPX::SpaceReference::Playfield);
-   const Matrix3D refToScene = Matrix3D::MatrixScale(1.f / vpuToWorldScale) * Matrix3D::MatrixInverse(space.m_transform);
    const Vertex3Ds sceneOrigin = refToScene * Vertex3Ds(p.pose.position.x, p.pose.position.y, p.pose.position.z);
    const Vertex3Ds sceneHit = refToScene * Vertex3Ds(p.hit[0], p.hit[1], p.hit[2]);
    // Head position in scene coordinates: midpoint of the two eyes' camera origins
@@ -1233,15 +1271,15 @@ void VRDevice::UpdateUIPointer(XrTime predictedDisplayTime, float vpuToWorldScal
    const Matrix3D viewToScene = Matrix3D::MatrixInverse(SceneLayout::ComposeView(space, m_eyeView[0], projScale));
    const Matrix3D viewToSceneRight = Matrix3D::MatrixInverse(SceneLayout::ComposeView(space, m_eyeView[1], projScale));
    const Vertex3Ds headScene = (viewToScene * Vertex3Ds(0.f, 0.f, 0.f) + viewToSceneRight * Vertex3Ds(0.f, 0.f, 0.f)) * 0.5f;
-   m_uiPointer.sceneOrigin[0] = sceneOrigin.x;
-   m_uiPointer.sceneOrigin[1] = sceneOrigin.y;
-   m_uiPointer.sceneOrigin[2] = sceneOrigin.z;
-   m_uiPointer.sceneHit[0] = sceneHit.x;
-   m_uiPointer.sceneHit[1] = sceneHit.y;
-   m_uiPointer.sceneHit[2] = sceneHit.z;
-   m_uiPointer.headScene[0] = headScene.x;
-   m_uiPointer.headScene[1] = headScene.y;
-   m_uiPointer.headScene[2] = headScene.z;
+   pointer.sceneOrigin[0] = sceneOrigin.x;
+   pointer.sceneOrigin[1] = sceneOrigin.y;
+   pointer.sceneOrigin[2] = sceneOrigin.z;
+   pointer.sceneHit[0] = sceneHit.x;
+   pointer.sceneHit[1] = sceneHit.y;
+   pointer.sceneHit[2] = sceneHit.z;
+   pointer.headScene[0] = headScene.x;
+   pointer.headScene[1] = headScene.y;
+   pointer.headScene[2] = headScene.z;
 }
 
 void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarget* vrRenderTarget)>& submitFrame)
@@ -1277,7 +1315,8 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
    RenderLayerInfo renderLayerInfo;
    renderLayerInfo.predictedDisplayTime = frameState.predictedDisplayTime;
 
-   m_predictedDisplayTimestamp = static_cast<float>((double)usec() / 1000000.);
+   // Predicted display time (SDL_GetTicksNS time base): now, plus its distance measured on the clock the runtime converts it to
+   m_predictedDisplayTimestampNs = static_cast<int64_t>(SDL_GetTicksNS());
    #if BX_PLATFORM_WINDOWS
    if (m_xrConvertTimeToWin32PerformanceCounterKHR)
    {
@@ -1287,7 +1326,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
       QueryPerformanceCounter(&now);
       LARGE_INTEGER TimerFreq;
       QueryPerformanceFrequency(&TimerFreq);
-      m_predictedDisplayTimestamp += static_cast<float>(displayTime.QuadPart - now.QuadPart) / static_cast<float>(TimerFreq.QuadPart);
+      m_predictedDisplayTimestampNs += static_cast<int64_t>(static_cast<double>(displayTime.QuadPart - now.QuadPart) * 1000000000. / static_cast<double>(TimerFreq.QuadPart));
    }
    #elif BX_PLATFORM_ANDROID || BX_PLATFORM_LINUX || BX_PLATFORM_OSX
    if (m_xrConvertTimeToTimespecTimeKHR)
@@ -1299,7 +1338,7 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
       time_t sec_diff = displayTime.tv_sec - now.tv_sec;
       long long nsec_diff = displayTime.tv_nsec - now.tv_nsec;
       int64_t total_nsec = sec_diff * 1000000000LL + nsec_diff;
-      m_predictedDisplayTimestamp += (float)(static_cast<double>(total_nsec) / 1000000000.0);
+      m_predictedDisplayTimestampNs += total_nsec;
    }
    #endif
 
@@ -1530,19 +1569,14 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          // Acquire and wait for an image from the swapchains (the timeout is infinite)
          uint32_t colorImageIndex = 0;
          uint32_t depthImageIndex = 0;
-         uint32_t uiImageIndex = 0;
          constexpr XrSwapchainImageAcquireInfo acquireInfo { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO, nullptr };
          OPENXR_CHECK(xrAcquireSwapchainImage(m_colorSwapchainInfo.swapchain, &acquireInfo, &colorImageIndex), "Failed to acquire Image from the Color Swapchian");
          OPENXR_CHECK(xrAcquireSwapchainImage(m_depthSwapchainInfo.swapchain, &acquireInfo, &depthImageIndex), "Failed to acquire Image from the Depth Swapchian");
-         if (m_uiSwapchainInfo.swapchain != XR_NULL_HANDLE)
-            OPENXR_CHECK(xrAcquireSwapchainImage(m_uiSwapchainInfo.swapchain, &acquireInfo, &uiImageIndex), "Failed to acquire Image from the UI Swapchain");
 
          XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
          waitInfo.timeout = XR_INFINITE_DURATION;
          OPENXR_CHECK(xrWaitSwapchainImage(m_colorSwapchainInfo.swapchain, &waitInfo), "Failed to wait for Image from the Color Swapchain");
          OPENXR_CHECK(xrWaitSwapchainImage(m_depthSwapchainInfo.swapchain, &waitInfo), "Failed to wait for Image from the Depth Swapchain");
-         if (m_uiSwapchainInfo.swapchain != XR_NULL_HANDLE)
-            OPENXR_CHECK(xrWaitSwapchainImage(m_uiSwapchainInfo.swapchain, &waitInfo), "Failed to wait for Image from the UI Swapchain");
 
          // Use the full range of recommended image size to achieve optimum resolution
          const XrRect2Di imageRect = { { 0, 0 }, { (int32_t)m_colorSwapchainInfo.width, (int32_t)m_colorSwapchainInfo.height } };
@@ -1590,25 +1624,6 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
             vrRenderTarget = m_swapchainRenderTargets[colorImageIndex + depthImageIndex * m_colorSwapchainInfo.imageViews.size()].get();
          }
 
-         // Wrap the acquired UI swapchain image as a render target. This must be done before submitFrame since the
-         // submitted frame is recorded by the logic thread which reads GetUIRenderTarget() once unblocked.
-         if (m_uiSwapchainInfo.swapchain != XR_NULL_HANDLE)
-         {
-            RenderTarget* uiRenderTarget = m_uiRenderTargets[uiImageIndex].get();
-            if (uiRenderTarget == nullptr)
-            {
-               bgfx::Attachment uiAttachment;
-               uiAttachment.init(m_uiSwapchainInfo.imageViews[uiImageIndex], bgfx::Access::Write, 0, 1, 0, BGFX_ATTACHMENT_NONE);
-               const bgfx::FrameBufferHandle fbh = bgfx::createFrameBuffer(1, &uiAttachment);
-               bgfx::TextureHandle depthHandle = BGFX_INVALID_HANDLE;
-               m_uiRenderTargets[uiImageIndex] = std::make_unique<RenderTarget>(rd, SurfaceType::RT_DEFAULT, fbh, uiAttachment.handle, m_uiSwapchainInfo.format, 
-                  depthHandle, bgfx::TextureFormat::Enum::Unknown, std::format("VRUILayer [{}]", uiImageIndex), m_uiSwapchainInfo.width, m_uiSwapchainInfo.height,
-                  colorFormat::RGBA);
-               uiRenderTarget = m_uiRenderTargets[uiImageIndex].get();
-            }
-            m_uiRenderTarget = uiRenderTarget;
-         }
-
          submitFrame(vrRenderTarget);
 
          // Fill out the XrCompositionLayerProjection structure for usage with xrEndFrame().
@@ -1621,11 +1636,6 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
          constexpr XrSwapchainImageReleaseInfo releaseInfo { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO, nullptr };
          OPENXR_CHECK(xrReleaseSwapchainImage(m_colorSwapchainInfo.swapchain, &releaseInfo), "Failed to release Image back to the Color Swapchain");
          OPENXR_CHECK(xrReleaseSwapchainImage(m_depthSwapchainInfo.swapchain, &releaseInfo), "Failed to release Image back to the Depth Swapchain");
-         if (m_uiSwapchainInfo.swapchain != XR_NULL_HANDLE)
-         {
-            m_uiRenderTarget = nullptr;
-            OPENXR_CHECK(xrReleaseSwapchainImage(m_uiSwapchainInfo.swapchain, &releaseInfo), "Failed to release Image back to the UI Swapchain");
-         }
 
          // Add passthrough layer first (background)
          if (m_passthroughEnabled && m_passthroughLayer != XR_NULL_HANDLE)
@@ -1638,21 +1648,10 @@ void VRDevice::RenderFrame(RenderDevice* rd, const std::function<void(RenderTarg
 
          renderLayerInfo.layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&renderLayerInfo.layerProjection));
 
-         // Submit the LiveUI as a separate view-locked quad layer on top of the scene. Rendering the UI inside the
-         // projection layer made it shake since a head locked overlay was reprojected as world locked geometry, and the
-         // fake stereo offset applied per eye made it appear unfocused.
-         if (m_uiSwapchainInfo.swapchain != XR_NULL_HANDLE && m_showUILayer && m_uiLayerPoseValid)
-         {
-            renderLayerInfo.layerQuad.layerFlags= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT | XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT;
-            renderLayerInfo.layerQuad.space = m_referenceSpace;
-            renderLayerInfo.layerQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-            renderLayerInfo.layerQuad.subImage.swapchain = m_uiSwapchainInfo.swapchain;
-            renderLayerInfo.layerQuad.subImage.imageRect = { { 0, 0 }, { (int32_t)m_uiSwapchainInfo.width, (int32_t)m_uiSwapchainInfo.height } };
-            renderLayerInfo.layerQuad.subImage.imageArrayIndex = 0;
-            renderLayerInfo.layerQuad.pose = m_uiLayerPose;
-            renderLayerInfo.layerQuad.size = { kUILayerWidth, kUILayerHeight };
-            renderLayerInfo.layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&renderLayerInfo.layerQuad));
-         }
+         // The LiveUI draw list is executed inside the projection layer as world-space geometry on the quad
+         // whose scene-space corners UpdateUIPointer computes (see RenderView / RenderUIScene). This goes
+         // through the same color keying as the scene (mixed reality keying does not apply to composited
+         // layers) and avoids the anchoring/sRGB issues of a dedicated composition layer.
       }
    }
 

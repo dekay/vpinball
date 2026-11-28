@@ -160,7 +160,7 @@ if [ "${BGFX_EXPECTED_SHA}" != "${BGFX_FOUND_SHA}" ]; then
 
    curl -sL https://github.com/bkaradzic/bgfx.cmake/releases/download/v${BGFX_CMAKE_VERSION}/bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz -o bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
    tar xzf bgfx.cmake.v${BGFX_CMAKE_VERSION}.tar.gz
-   curl -sL https://github.com/vbousquet/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
+   curl -sL https://github.com/vpinball/bgfx/archive/${BGFX_PATCH_SHA}.tar.gz -o bgfx-${BGFX_PATCH_SHA}.tar.gz
    tar xzf bgfx-${BGFX_PATCH_SHA}.tar.gz
    cd bgfx.cmake
    rm -rf bgfx
@@ -507,7 +507,11 @@ fi
 # build ffmpeg
 #
 
-FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}_002"
+# Decoding of local media files only: no network (protocols, TLS), encoders or muxers. Library autodetection is off, so
+# what happens to be installed on the build machine is never linked in (libcurl was, with FFmpeg 9.1)
+# Windows: native threads, and the MinGW runtime (libgcc, winpthread) and zlib linked statically, so the DLLs only
+# depend on system DLLs
+FFMPEG_EXPECTED_SHA="${FFMPEG_SHA}_003"
 FFMPEG_FOUND_SHA="$([ -f ffmpeg/cache.txt ] && cat ffmpeg/cache.txt || echo "")"
 
 if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
@@ -528,10 +532,17 @@ if [ "${FFMPEG_EXPECTED_SHA}" != "${FFMPEG_FOUND_SHA}" ]; then
          --enable-shared \
          --disable-static \
          --disable-programs \
+         --disable-autodetect \
+         --enable-zlib \
+         --enable-w32threads \
+         --disable-network \
+         --disable-encoders \
+         --disable-muxers \
          --disable-doc \
          --disable-debug \
          --disable-avdevice \
          --disable-avfilter \
+         --extra-ldflags=\"-static\" \
          --arch=\"x86_64\" \
          --build-suffix=64 &&
       make -j$(nproc)
@@ -545,10 +556,12 @@ fi
 
 #
 # build libwinevbs (VBScript engine of the standalone build), with MinGW like ffmpeg as Wine's code does not build with MSVC (yet).
-# Only the DLL and header are used, vpx-standalone.vcxproj makes the import library (see make/winevbs64-msvc.def)
+# Only the DLL and header are used, the MSVC standalone build (CMake BUILD_STANDALONE=ON or vpx-standalone.vcxproj)
+# makes the import library (see make/winevbs64-msvc.def)
 #
 
-LIBWINEVBS_EXPECTED_SHA="${LIBWINEVBS_SHA}-001"
+# MinGW runtime (libgcc, winpthread) linked statically like ffmpeg's, so the DLL only depends on system DLLs
+LIBWINEVBS_EXPECTED_SHA="${LIBWINEVBS_SHA}-002"
 LIBWINEVBS_FOUND_SHA="$([ -f libwinevbs/cache.txt ] && cat libwinevbs/cache.txt || echo "")"
 
 if [ "${LIBWINEVBS_EXPECTED_SHA}" != "${LIBWINEVBS_FOUND_SHA}" ]; then
@@ -570,6 +583,7 @@ if [ "${LIBWINEVBS_EXPECTED_SHA}" != "${LIBWINEVBS_FOUND_SHA}" ]; then
          -DPLATFORM=win-mingw \
          -DARCH=x64 \
          -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+         -DCMAKE_SHARED_LINKER_FLAGS=-static \
          -B build &&
       cmake --build build -- -j$(nproc)
    "
@@ -602,7 +616,8 @@ if [ "${ZLIB_EXPECTED_SHA}" != "${ZLIB_FOUND_SHA}" ]; then
    cmake \
       -G "Visual Studio 18 2026" \
       -DBUILD_SHARED_LIBS=OFF \
-      -DZLIB_BUILD_EXAMPLES=OFF \
+      -DZLIB_BUILD_SHARED=OFF \
+      -DZLIB_BUILD_TESTING=OFF \
       -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded\$<\$<CONFIG:Debug>:Debug>" \
       -B build
    cmake --build build --config ${BUILD_TYPE}
@@ -715,7 +730,7 @@ if [ "${LIBMYSOFA_EXPECTED_SHA}" != "${LIBMYSOFA_FOUND_SHA}" ]; then
       -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
       -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded\$<\$<CONFIG:Debug>:Debug>" \
       -DZLIB_INCLUDE_DIR="$PWD/../../zlib/zlib" \
-      -DZLIB_LIBRARY="$PWD/../../zlib/zlib/build/${BUILD_TYPE}/zlibstatic.lib" \
+      -DZLIB_LIBRARY="$PWD/../../zlib/zlib/build/${BUILD_TYPE}/libzs.lib" \
       -B build
    cmake --build build --config ${BUILD_TYPE}
    cp build/src/mysofa_export.h src/hrtf
@@ -861,7 +876,7 @@ cp libwinevbs/libwinevbs/build/winevbs64.dll ../../../third-party/runtime-libs/w
 mkdir -p ../../../third-party/include/libwinevbs
 cp libwinevbs/libwinevbs/include/libwinevbs.h ../../../third-party/include/libwinevbs/
 
-cp zlib/zlib/build/${BUILD_TYPE}/zlibstatic.lib ../../../third-party/build-libs/windows-x64
+cp zlib/zlib/build/${BUILD_TYPE}/libzs.lib ../../../third-party/build-libs/windows-x64/zlibstatic.lib
 
 cp libmysofa/libmysofa/build/src/${BUILD_TYPE}/mysofa.lib ../../../third-party/build-libs/windows-x64
 cp libmysofa/libmysofa/src/hrtf/mysofa.h ../../../third-party/include
@@ -878,10 +893,4 @@ mkdir -p ../../../third-party/include/spatialaudio
 cp -r libspatialaudio/libspatialaudio/include/*.h libspatialaudio/libspatialaudio/include/{adm,dsp,hrtf,kiss_fft} ../../../third-party/include/spatialaudio
 cp libspatialaudio/libspatialaudio/build/include/SpatialaudioConfig.h ../../../third-party/include/spatialaudio
 
-cp "${MSYS2_PATH}/ucrt64/bin/libz-1.dll" ../../../third-party/runtime-libs/windows-x64
-cp "${MSYS2_PATH}/ucrt64/bin/libiconv-2.dll" ../../../third-party/runtime-libs/windows-x64
-cp "${MSYS2_PATH}/ucrt64/bin/libwinpthread-1.dll" ../../../third-party/runtime-libs/windows-x64
-cp "${MSYS2_PATH}/ucrt64/bin/liblzma-5.dll" ../../../third-party/runtime-libs/windows-x64
-cp "${MSYS2_PATH}/ucrt64/bin/libbz2-1.dll" ../../../third-party/runtime-libs/windows-x64
-cp "${MSYS2_PATH}/ucrt64/bin/libgcc_s_seh-1.dll" ../../../third-party/runtime-libs/windows-x64
 cp "${MSYS2_PATH}/ucrt64/bin/libstdc++-6.dll" ../../../third-party/runtime-libs/windows-x64

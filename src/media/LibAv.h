@@ -8,6 +8,7 @@
 extern "C"
 {
 #include "libavutil/imgutils.h"
+#include "libavutil/intreadwrite.h"
 #include "libavcodec/avcodec.h"
 #include "libavformat/avformat.h"
 #include "libswscale/swscale.h"
@@ -72,6 +73,8 @@ public:
    typedef AVPacket*(CDECL* fn_av_packet_alloc)(void);
    typedef void(CDECL* fn_av_packet_free)(AVPacket** pkt);
    typedef void(CDECL* fn_av_packet_unref)(AVPacket* pkt);
+   typedef int(CDECL* fn_av_new_packet)(AVPacket* pkt, int size);
+   typedef uint8_t*(CDECL* fn_av_packet_get_side_data)(const AVPacket* pkt, enum AVPacketSideDataType type, size_t* size);
    typedef AVCodecContext*(CDECL* fn_avcodec_alloc_context3)(const AVCodec* codec);
    typedef const AVCodec*(CDECL* fn_avcodec_find_decoder)(enum AVCodecID id);
    typedef void(CDECL* fn_avcodec_flush_buffers)(AVCodecContext* avctx);
@@ -117,6 +120,8 @@ public:
    fn_av_packet_alloc _av_packet_alloc = nullptr;
    fn_av_packet_free _av_packet_free = nullptr;
    fn_av_packet_unref _av_packet_unref = nullptr;
+   fn_av_new_packet _av_new_packet = nullptr;
+   fn_av_packet_get_side_data _av_packet_get_side_data = nullptr;
    fn_avcodec_alloc_context3 _avcodec_alloc_context3 = nullptr;
    fn_avcodec_find_decoder _avcodec_find_decoder = nullptr;
    fn_avcodec_flush_buffers _avcodec_flush_buffers = nullptr;
@@ -174,18 +179,24 @@ private:
       // FFmpeg runtime libraries are deployed next to the executable
       char path[MAX_PATH];
       if (GetModuleFileNameA(nullptr, path, MAX_PATH) == 0)
+      {
+         isLoaded = false;
          return;
+      }
       std::string basepath(path);
       basepath.erase(basepath.find_last_of("\\/"));
       basepath += '\\';
 
       hinstLib = LoadLibraryExA((basepath + (x64 ? "avcodec64-" LIBAV_STR(LIBAVCODEC_VERSION_MAJOR) ".dll" : "avcodec-" LIBAV_STR(LIBAVCODEC_VERSION_MAJOR) ".dll")).c_str(), NULL,
          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      isLoaded &= (hinstLib != nullptr); // A missing library leaves its entry points null
       if (hinstLib)
       {
          _av_packet_alloc = reinterpret_cast<fn_av_packet_alloc>(GetProcAddress(hinstLib, "av_packet_alloc"));
          _av_packet_free = reinterpret_cast<fn_av_packet_free>(GetProcAddress(hinstLib, "av_packet_free"));
          _av_packet_unref = reinterpret_cast<fn_av_packet_unref>(GetProcAddress(hinstLib, "av_packet_unref"));
+         _av_new_packet = reinterpret_cast<fn_av_new_packet>(GetProcAddress(hinstLib, "av_new_packet"));
+         _av_packet_get_side_data = reinterpret_cast<fn_av_packet_get_side_data>(GetProcAddress(hinstLib, "av_packet_get_side_data"));
          _avcodec_alloc_context3 = reinterpret_cast<fn_avcodec_alloc_context3>(GetProcAddress(hinstLib, "avcodec_alloc_context3"));
          _avcodec_find_decoder = reinterpret_cast<fn_avcodec_find_decoder>(GetProcAddress(hinstLib, "avcodec_find_decoder"));
          _avcodec_flush_buffers = reinterpret_cast<fn_avcodec_flush_buffers>(GetProcAddress(hinstLib, "avcodec_flush_buffers"));
@@ -195,12 +206,13 @@ private:
          _avcodec_parameters_to_context = reinterpret_cast<fn_avcodec_parameters_to_context>(GetProcAddress(hinstLib, "avcodec_parameters_to_context"));
          _avcodec_receive_frame = reinterpret_cast<fn_avcodec_receive_frame>(GetProcAddress(hinstLib, "avcodec_receive_frame"));
          _avcodec_send_packet = reinterpret_cast<fn_avcodec_send_packet>(GetProcAddress(hinstLib, "avcodec_send_packet"));
-         isLoaded &= _av_packet_alloc && _av_packet_free && _av_packet_unref && _avcodec_alloc_context3 && _avcodec_find_decoder && _avcodec_flush_buffers && _avcodec_free_context
-            && _avcodec_get_name && _avcodec_open2 && _avcodec_parameters_to_context && _avcodec_receive_frame && _avcodec_send_packet;
+         isLoaded &= _av_packet_alloc && _av_packet_free && _av_packet_unref && _av_new_packet && _av_packet_get_side_data && _avcodec_alloc_context3 && _avcodec_find_decoder
+            && _avcodec_flush_buffers && _avcodec_free_context && _avcodec_get_name && _avcodec_open2 && _avcodec_parameters_to_context && _avcodec_receive_frame && _avcodec_send_packet;
       }
 
       hinstLib = LoadLibraryExA((basepath + (x64 ? "avformat64-" LIBAV_STR(LIBAVFORMAT_VERSION_MAJOR) ".dll" : "avformat-" LIBAV_STR(LIBAVFORMAT_VERSION_MAJOR) ".dll")).c_str(), NULL,
          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      isLoaded &= (hinstLib != nullptr); // A missing library leaves its entry points null
       if (hinstLib)
       {
          _av_find_best_stream = reinterpret_cast<fn_av_find_best_stream>(GetProcAddress(hinstLib, "av_find_best_stream"));
@@ -214,6 +226,7 @@ private:
 
       hinstLib = LoadLibraryExA((basepath + (x64 ? "avutil64-" LIBAV_STR(LIBAVUTIL_VERSION_MAJOR) ".dll" : "avutil-" LIBAV_STR(LIBAVUTIL_VERSION_MAJOR) ".dll")).c_str(), NULL,
          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      isLoaded &= (hinstLib != nullptr); // A missing library leaves its entry points null
       if (hinstLib)
       {
          _av_get_bytes_per_sample = reinterpret_cast<fn_av_get_bytes_per_sample>(GetProcAddress(hinstLib, "av_get_bytes_per_sample"));
@@ -234,6 +247,7 @@ private:
 
       hinstLib = LoadLibraryExA((basepath + (x64 ? "swresample64-" LIBAV_STR(LIBSWRESAMPLE_VERSION_MAJOR) ".dll" : "swresample-" LIBAV_STR(LIBSWRESAMPLE_VERSION_MAJOR) ".dll")).c_str(),
          NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      isLoaded &= (hinstLib != nullptr); // A missing library leaves its entry points null
       if (hinstLib)
       {
          _swr_alloc_set_opts2 = reinterpret_cast<fn_swr_alloc_set_opts2>(GetProcAddress(hinstLib, "swr_alloc_set_opts2"));
@@ -246,6 +260,7 @@ private:
 
       hinstLib = LoadLibraryExA((basepath + (x64 ? "swscale64-" LIBAV_STR(LIBSWSCALE_VERSION_MAJOR) ".dll" : "swscale-" LIBAV_STR(LIBSWSCALE_VERSION_MAJOR) ".dll")).c_str(), NULL,
          LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      isLoaded &= (hinstLib != nullptr); // A missing library leaves its entry points null
       if (hinstLib)
       {
          _sws_freeContext = reinterpret_cast<fn_sws_freeContext>(GetProcAddress(hinstLib, "sws_freeContext"));
@@ -257,6 +272,8 @@ private:
       _av_packet_alloc = &av_packet_alloc;
       _av_packet_free = &av_packet_free;
       _av_packet_unref = &av_packet_unref;
+      _av_new_packet = &av_new_packet;
+      _av_packet_get_side_data = &av_packet_get_side_data;
       _avcodec_alloc_context3 = &avcodec_alloc_context3;
       _avcodec_find_decoder = &avcodec_find_decoder;
       _avcodec_flush_buffers = &avcodec_flush_buffers;
